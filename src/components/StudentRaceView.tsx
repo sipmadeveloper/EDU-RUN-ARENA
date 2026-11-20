@@ -17,8 +17,9 @@ import {
   RotateCcw,
   Home,
   Award,
-  Mic,
-  MicOff,
+  Music,
+  SkipForward,
+  Grid2x2,
 } from 'lucide-react';
 import { getVictoryMetaForRank } from '../three/victoryAnimations';
 import {
@@ -31,12 +32,16 @@ import {
   type RoomStatus,
 } from '../types/game';
 import type { JoinedSession } from './StudentJoinView';
-import { StadiumArena3D } from './StadiumArena3D';
+import {
+  CAMERA_PRESET_LIST,
+  StadiumArena3D,
+  type CameraPresetId,
+  type CameraViewMode,
+} from './StadiumArena3D';
 import { MatchResultsModal } from './MatchResultsModal';
 import { StadiumCountdownOverlay } from './StadiumCountdownOverlay';
 import { Loading3D } from './Loading3D';
-import { soundEngine } from '../audio/soundEngine';
-import { CommentatorClient, type CommentatorCaption } from '../audio/commentatorClient';
+import { RACE_MUSIC_TRACKS, soundEngine, type RaceMusicTrackId } from '../audio/soundEngine';
 import {
   MAX_MATCH_SCORE,
   calcPointsPerQuestion,
@@ -89,10 +94,10 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const [wsConnected, setWsConnected] = useState(true);
   const [muted, setMuted] = useState(soundEngine.muted);
   const [volume, setVolume] = useState(soundEngine.volume);
-  const [commentaryEnabled, setCommentaryEnabled] = useState(true);
-  const [commentatorCaption, setCommentatorCaption] = useState<CommentatorCaption | null>(null);
-  const [commentatorError, setCommentatorError] = useState<string | null>(null);
-  const [cameraPreset, setCameraPreset] = useState<'chase' | 'broadcast' | 'finish'>('chase');
+  const [musicEnabled, setMusicEnabled] = useState(soundEngine.musicEnabled);
+  const [musicTrack, setMusicTrack] = useState<RaceMusicTrackId>(soundEngine.trackId);
+  const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('chase');
+  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [showResultsOverride, setShowResultsOverride] = useState(false);
 
@@ -100,7 +105,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const finishedCelebratedRef = useRef(false);
   const roomFinishedAudioRef = useRef(false);
   const finishingSyncRef = useRef(false);
-  const commentatorRef = useRef<CommentatorClient | null>(null);
   const livePlayersRef = useRef<PlayerState[]>([]);
   const liveVersionRef = useRef(0);
   const lastHudSyncRef = useRef(0);
@@ -144,49 +148,23 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
 
         if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
           setCameraPreset('finish');
+          setCameraViewMode('single');
           if (!roomFinishedAudioRef.current) {
             roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
             soundEngine.setRaceIntensity(0, { allowAutoSwell: false });
             soundEngine.playFinishWhistle();
-            soundEngine.setCrowdMood('victory');
+            soundEngine.setMusicMood('victory');
             soundEngine.startVictoryMusic();
             if (!finishedCelebratedRef.current) {
               finishedCelebratedRef.current = true;
-              soundEngine.triggerCrowdSwell(1.15, 3.2);
+              soundEngine.playCrowdCheerAndFanfare();
             }
           }
         }
       },
       onParticipants: (list) => {
         setWsConnected(true);
-        // Detect rivals' boost / penalty / finish transitions for live commentator
-        const prevMap = prevParticipantsMapRef.current;
-        if (prevMap.size > 0) {
-          for (const p of list) {
-            const old = prevMap.get(p.id);
-            if (!old) continue;
-            if (!old.finishedAt && p.finishedAt && p.finishedAt > 0) {
-              commentatorRef.current?.pushEvent(
-                `${p.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${p.finishRank ?? 1}!`
-              );
-            } else if (p.answeredCount > old.answeredCount) {
-              if (p.effectState === 'boost') {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
-                );
-              } else if (p.unansweredCount > old.unansweredCount) {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} kehabisan waktu soal dan larinya melambat!`
-                );
-              } else if (p.effectState === 'penalty') {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} kurang tepat menjawab dan harus melambat sementara!`
-                );
-              }
-            }
-          }
-        }
         prevParticipantsMapRef.current = new Map(list.map((p) => [p.id, p]));
         rawParticipantsRef.current = list;
 
@@ -229,7 +207,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           lastCountdownTickRef.current = remainingSec;
           setCountdownTotal(totalTicks);
           setCountdownVal(remainingSec);
-          commentatorRef.current?.playCountdownVoice(remainingSec);
           if (remainingSec === 0) {
             soundEngine.playStartingPistol();
             soundEngine.playStartWhistle('go');
@@ -462,16 +439,25 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     }
   }
 
-  function toggleCommentary() {
+  function toggleMusic() {
     soundEngine.unlock();
-    const next = !commentaryEnabled;
-    setCommentaryEnabled(next);
-    commentatorRef.current?.setEnabled(next);
-    if (!next) {
-      setCommentatorCaption(null);
-      setCommentatorError(null);
+    const next = !musicEnabled;
+    soundEngine.musicEnabled = next;
+    setMusicEnabled(next);
+  }
+
+  function handleCycleTrack() {
+    const nextId = soundEngine.cycleMusicTrack();
+    setMusicTrack(nextId);
+    setMusicEnabled(true);
+    if (soundEngine.muted) {
+      soundEngine.muted = false;
+      setMuted(false);
     }
   }
+
+  const activeTrackMeta =
+    RACE_MUSIC_TRACKS.find((t) => t.id === musicTrack) ?? RACE_MUSIC_TRACKS[0];
 
   const sortedLeader = useMemo(
     () => [...players].sort((a, b) => b.progress - a.progress || b.score - a.score),
@@ -570,35 +556,13 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   }, [roomStatus, sortedLeader, localPlayer, players, currentQuestion, questionTimeLeft]);
 
   useEffect(() => {
-    soundEngine.startAmbientCrowd('waiting', activeVenue);
-    const client = new CommentatorClient({
-      onCaption: (cap) => setCommentatorCaption(cap),
-      onError: (err) => setCommentatorError(err),
-    });
-    commentatorRef.current = client;
-    client.start();
+    soundEngine.startRaceMusic('waiting', activeVenue);
 
     return () => {
-      client.destroy();
-      commentatorRef.current = null;
       soundEngine.stopAllRaceAudio();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!room || !commentatorRef.current) return;
-    commentatorRef.current.updateSnapshot({
-      roomCode: room.code,
-      roomName: room.name,
-      subject: room.subject,
-      grade: room.grade,
-      status: room.status,
-      totalLaps,
-      questionCount: totalQuestions,
-      players,
-    });
-  }, [room, players, totalLaps, totalQuestions]);
 
   useEffect(() => {
     soundEngine.setVenue(activeVenue);
@@ -644,6 +608,10 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           roomStatus={roomStatus}
           roomName={room?.name || 'EDU RUN ARENA 3D'}
           cameraPreset={cameraPreset}
+          cameraViewMode={cameraViewMode}
+          pipPlacement="top-row"
+          onSelectCameraPreset={setCameraPreset}
+          onChangeCameraViewMode={setCameraViewMode}
           venue={activeVenue}
         />
       </div>
@@ -680,7 +648,24 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setCameraViewMode((prev) =>
+                    prev === 'single' ? 'pip' : prev === 'pip' ? 'quad' : 'single'
+                  )
+                }
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+                  cameraViewMode !== 'single'
+                    ? 'bg-[#FF6B1A] border-[#FF6B1A] text-white'
+                    : 'bg-[#0F2957] border-blue-400/30 text-white hover:bg-blue-800'
+                }`}
+                title="Live Preview 4 Posisi Kamera"
+              >
+                <Grid2x2 className="w-4 h-4 text-[#FACC15]" />
+                <span>{cameraViewMode === 'quad' ? 'Grid 2×2' : '4 Kamera'}</span>
+              </button>
               <button
                 onClick={cycleVenue}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0F2957] border border-blue-400/30 text-xs font-semibold text-white hover:bg-blue-800 cursor-pointer"
@@ -695,23 +680,34 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   {room.code}
                 </div>
               </div>
-              <button
-                onClick={toggleCommentary}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
-                  commentaryEnabled
-                    ? 'bg-[#FF6B1A]/20 border-[#FF6B1A]/60 text-[#FACC15]'
-                    : 'bg-[#0F2957] border-white/15 text-slate-400'
-                }`}
-                title={commentaryEnabled ? 'Matikan Komentator Langsung' : 'Aktifkan Komentator Langsung'}
-              >
-                {commentaryEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                <span className="hidden sm:inline">{commentaryEnabled ? 'Komentator ON' : 'Komentator OFF'}</span>
-              </button>
+              <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#0F2957] border border-white/15">
+                <button
+                  onClick={toggleMusic}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                    musicEnabled
+                      ? 'bg-[#FF6B1A]/20 text-[#FACC15]'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title={musicEnabled ? 'Matikan Musik Semangat' : 'Aktifkan Musik Semangat'}
+                >
+                  <Music className="w-4 h-4" />
+                  <span className="hidden sm:inline">
+                    {musicEnabled ? activeTrackMeta.title : 'Musik OFF'}
+                  </span>
+                </button>
+                <button
+                  onClick={handleCycleTrack}
+                  className="p-1.5 rounded-lg hover:bg-white/10 text-blue-200 hover:text-[#FACC15] cursor-pointer"
+                  title={`Ganti Lagu (${activeTrackMeta.title})`}
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <div className="flex items-center gap-2 px-2.5 py-2 rounded-xl bg-[#0F2957] border border-white/15">
                 <button
                   onClick={toggleMute}
                   className="text-white hover:text-[#FACC15] cursor-pointer"
-                  title={muted ? 'Aktifkan Suara' : 'Matikan Suara'}
+                  title={muted ? 'Aktifkan Musik & Suara' : 'Matikan Semua Suara'}
                 >
                   {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                 </button>
@@ -722,27 +718,12 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   step={0.05}
                   value={muted ? 0 : volume}
                   onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                  aria-label="Volume Audio Stadion"
+                  aria-label="Volume Musik Pertandingan"
                   className="w-16 accent-[#FF6B1A] cursor-pointer"
                 />
               </div>
             </div>
           </div>
-
-          {commentaryEnabled && (commentatorCaption || commentatorError) && (
-            <div className="max-w-3xl mx-auto w-full px-4 py-2.5 rounded-xl bg-[#081226]/94 border border-[#FACC15]/40 text-xs sm:text-sm pointer-events-auto">
-              {commentatorError ? (
-                <div className="text-amber-300 font-medium">{commentatorError}</div>
-              ) : commentatorCaption ? (
-                <div className="flex items-baseline gap-2.5">
-                  <span className="font-mono font-bold uppercase text-[#FF6B1A] shrink-0">
-                    {commentatorCaption.speaker}:
-                  </span>
-                  <span className="text-slate-100 leading-snug">{commentatorCaption.text}</span>
-                </div>
-              ) : null}
-            </div>
-          )}
 
           <div className="max-w-4xl mx-auto w-full p-4 sm:p-5 rounded-2xl bg-[#081226]/92 border border-blue-400/30 pointer-events-auto">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -880,24 +861,54 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                     <span className="hidden sm:inline">{activeVenueMeta.shortLabel}</span>
                   </button>
                   <button
-                    onClick={() =>
-                      setCameraPreset((prev) => (prev === 'chase' ? 'broadcast' : 'chase'))
-                    }
-                    className="p-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-slate-200 cursor-pointer"
-                    title="Ganti Sudut Kamera"
+                    type="button"
+                    onClick={() => {
+                      const idx = CAMERA_PRESET_LIST.findIndex((c) => c.id === cameraPreset);
+                      const next = CAMERA_PRESET_LIST[(idx + 1) % CAMERA_PRESET_LIST.length];
+                      setCameraPreset(next.id);
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-xs font-semibold text-slate-200 cursor-pointer"
+                    title="Ganti Sudut Kamera (4 Posisi)"
                   >
-                    <Camera className="w-4 h-4" />
+                    <Camera className="w-3.5 h-3.5 text-[#FF6B1A]" />
+                    <span className="font-mono text-[11px]">
+                      {CAMERA_PRESET_LIST.find((c) => c.id === cameraPreset)?.camCode || 'CAM'}
+                    </span>
                   </button>
                   <button
-                    onClick={toggleCommentary}
+                    type="button"
+                    onClick={() =>
+                      setCameraViewMode((prev) =>
+                        prev === 'single' ? 'pip' : prev === 'pip' ? 'quad' : 'single'
+                      )
+                    }
+                    className={`inline-flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                      cameraViewMode !== 'single'
+                        ? 'bg-[#FF6B1A] text-white'
+                        : 'bg-[#0F2957] hover:bg-blue-800 text-slate-200'
+                    }`}
+                    title="Live Preview 4 Kamera"
+                  >
+                    <Grid2x2 className="w-3.5 h-3.5 text-[#FACC15]" />
+                    <span className="hidden sm:inline">4 Cam</span>
+                  </button>
+                  <button
+                    onClick={toggleMusic}
                     className={`p-2 rounded-lg cursor-pointer ${
-                      commentaryEnabled
+                      musicEnabled
                         ? 'bg-[#FF6B1A]/25 text-[#FACC15] border border-[#FF6B1A]/50'
                         : 'bg-[#0F2957] hover:bg-blue-800 text-slate-400'
                     }`}
-                    title={commentaryEnabled ? 'Matikan Komentator' : 'Aktifkan Komentator'}
+                    title={musicEnabled ? `Matikan Musik (${activeTrackMeta.title})` : 'Aktifkan Musik Semangat'}
                   >
-                    {commentaryEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+                    <Music className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleCycleTrack}
+                    className="p-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-slate-200 hover:text-[#FACC15] cursor-pointer"
+                    title={`Ganti Lagu (${activeTrackMeta.title})`}
+                  >
+                    <SkipForward className="w-4 h-4" />
                   </button>
                   <button
                     onClick={toggleMute}
@@ -950,23 +961,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
               </div>
             )}
 
-            {/* COMPACT LIVE COMMENTATOR SUBTITLE BAR */}
-            {commentaryEnabled && !toast && (commentatorCaption || commentatorError) && (
-              <div className="flex justify-center pointer-events-none">
-                <div className="max-w-2xl px-4 py-1.5 rounded-xl bg-[#081226]/92 border border-[#FACC15]/35 text-xs sm:text-sm shadow-lg">
-                  {commentatorError ? (
-                    <span className="text-amber-300 font-medium">{commentatorError}</span>
-                  ) : commentatorCaption ? (
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono font-bold uppercase text-[#FF6B1A] shrink-0">
-                        {commentatorCaption.speaker}:
-                      </span>
-                      <span className="text-slate-100 line-clamp-1">{commentatorCaption.text}</span>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* COMPACT BOTTOM-DOCKED QUESTION PANEL (keeps running character unobstructed above) */}
@@ -1119,16 +1113,16 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                 <span>{activeVenueMeta.shortLabel}</span>
               </button>
               <button
-                onClick={toggleCommentary}
+                onClick={toggleMusic}
                 className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
-                  commentaryEnabled
+                  musicEnabled
                     ? 'bg-[#FF6B1A]/20 border-[#FF6B1A]/60 text-[#FACC15]'
                     : 'bg-[#0F2957] border-white/15 text-slate-400'
                 }`}
-                title={commentaryEnabled ? 'Matikan Komentator' : 'Aktifkan Komentator'}
+                title={musicEnabled ? 'Matikan Musik Kemenangan' : 'Aktifkan Musik Kemenangan'}
               >
-                {commentaryEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                <span>{commentaryEnabled ? 'Komentator ON' : 'OFF'}</span>
+                <Music className="w-4 h-4" />
+                <span>{musicEnabled ? 'Musik ON' : 'Musik OFF'}</span>
               </button>
               <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#0F2957] border border-white/15">
                 <button
@@ -1151,17 +1145,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
               </div>
             </div>
           </div>
-
-          {commentaryEnabled && commentatorCaption && (
-            <div className="max-w-3xl mx-auto w-full px-4 py-2 rounded-xl bg-[#081226]/92 border border-[#FACC15]/40 text-xs sm:text-sm pointer-events-none">
-              <div className="flex items-baseline gap-2.5">
-                <span className="font-mono font-bold uppercase text-[#FF6B1A] shrink-0">
-                  {commentatorCaption.speaker}:
-                </span>
-                <span className="text-slate-100 leading-snug">{commentatorCaption.text}</span>
-              </div>
-            </div>
-          )}
 
           <div className="max-w-5xl mx-auto w-full p-3.5 sm:p-4 rounded-2xl bg-[#081226]/92 border border-blue-400/35 pointer-events-auto shadow-2xl space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

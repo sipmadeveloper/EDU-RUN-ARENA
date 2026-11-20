@@ -14,9 +14,10 @@ import {
   Trees,
   Volume2,
   VolumeX,
-  Mic,
-  MicOff,
+  Music,
+  SkipForward,
   Link2,
+  Grid2x2,
 } from 'lucide-react';
 import {
   AVATAR_COLORS,
@@ -26,11 +27,15 @@ import {
   type RoomSettings,
   type RoomStatus,
 } from '../types/game';
-import { StadiumArena3D } from './StadiumArena3D';
+import {
+  CAMERA_PRESET_LIST,
+  StadiumArena3D,
+  type CameraPresetId,
+  type CameraViewMode,
+} from './StadiumArena3D';
 import { StadiumCountdownOverlay } from './StadiumCountdownOverlay';
 import { Loading3D } from './Loading3D';
-import { soundEngine } from '../audio/soundEngine';
-import { CommentatorClient, type CommentatorCaption } from '../audio/commentatorClient';
+import { RACE_MUSIC_TRACKS, soundEngine, type RaceMusicTrackId } from '../audio/soundEngine';
 import {
   MAX_MATCH_SCORE,
   calcPointsPerQuestion,
@@ -70,15 +75,14 @@ export function TeacherRoomMonitor({
   const [actionBusy, setActionBusy] = useState(false);
   const [excelBusy, setExcelBusy] = useState(false);
   const [error, setError] = useState('');
-  const [cameraPreset, setCameraPreset] = useState<'chase' | 'broadcast' | 'finish'>('broadcast');
+  const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('broadcast');
+  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('pip');
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [muted, setMuted] = useState(soundEngine.muted);
   const [volume, setVolume] = useState(soundEngine.volume);
-  const [commentaryEnabled, setCommentaryEnabled] = useState(true);
-  const [commentatorCaption, setCommentatorCaption] = useState<CommentatorCaption | null>(null);
-  const [commentatorError, setCommentatorError] = useState<string | null>(null);
+  const [musicEnabled, setMusicEnabled] = useState(soundEngine.musicEnabled);
+  const [musicTrack, setMusicTrack] = useState<RaceMusicTrackId>(soundEngine.trackId);
 
-  const commentatorRef = useRef<CommentatorClient | null>(null);
   const livePlayersRef = useRef<PlayerState[]>([]);
   const liveVersionRef = useRef(0);
   const lastHudSyncRef = useRef(0);
@@ -115,6 +119,7 @@ export function TeacherRoomMonitor({
 
         if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
           setCameraPreset('finish');
+          setCameraViewMode('single');
           if (!roomFinishedAudioRef.current) {
             roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
@@ -132,24 +137,7 @@ export function TeacherRoomMonitor({
             const old = prevMap.get(p.id);
             if (!old) continue;
             if (!old.finishedAt && p.finishedAt && p.finishedAt > 0) {
-              soundEngine.triggerCrowdSwell(0.85, 2.2);
-              commentatorRef.current?.pushEvent(
-                `${p.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${p.finishRank ?? 1}!`
-              );
-            } else if (p.answeredCount > old.answeredCount) {
-              if (p.effectState === 'boost') {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
-                );
-              } else if (p.unansweredCount > old.unansweredCount) {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} kehabisan waktu soal dan larinya melambat!`
-                );
-              } else if (p.effectState === 'penalty') {
-                commentatorRef.current?.pushEvent(
-                  `${p.name} kurang tepat menjawab dan harus melambat sementara!`
-                );
-              }
+              soundEngine.playCrowdCheerAndFanfare();
             }
           }
         }
@@ -193,7 +181,6 @@ export function TeacherRoomMonitor({
           lastCountdownTickRef.current = remainingSec;
           setCountdownTotal(totalTicks);
           setCountdownVal(remainingSec);
-          commentatorRef.current?.playCountdownVoice(remainingSec);
           if (remainingSec === 0) {
             soundEngine.playStartingPistol();
             soundEngine.playStartWhistle('go');
@@ -319,16 +306,25 @@ export function TeacherRoomMonitor({
     }
   }
 
-  function toggleCommentary() {
+  function toggleMusic() {
     soundEngine.unlock();
-    const next = !commentaryEnabled;
-    setCommentaryEnabled(next);
-    commentatorRef.current?.setEnabled(next);
-    if (!next) {
-      setCommentatorCaption(null);
-      setCommentatorError(null);
+    const next = !musicEnabled;
+    soundEngine.musicEnabled = next;
+    setMusicEnabled(next);
+  }
+
+  function handleCycleTrack() {
+    const nextId = soundEngine.cycleMusicTrack();
+    setMusicTrack(nextId);
+    setMusicEnabled(true);
+    if (soundEngine.muted) {
+      soundEngine.muted = false;
+      setMuted(false);
     }
   }
+
+  const activeTrackMeta =
+    RACE_MUSIC_TRACKS.find((t) => t.id === musicTrack) ?? RACE_MUSIC_TRACKS[0];
 
   const activeVenue: RaceVenueId = venueOverride ?? room?.settings?.venue ?? 'stadium_day';
   const roomStatus = room?.status ?? 'waiting';
@@ -388,35 +384,13 @@ export function TeacherRoomMonitor({
   }, [roomStatus, players]);
 
   useEffect(() => {
-    soundEngine.startAmbientCrowd('waiting', activeVenue);
-    const client = new CommentatorClient({
-      onCaption: (cap) => setCommentatorCaption(cap),
-      onError: (err) => setCommentatorError(err),
-    });
-    commentatorRef.current = client;
-    client.start();
+    soundEngine.startRaceMusic('waiting', activeVenue);
 
     return () => {
-      client.destroy();
-      commentatorRef.current = null;
       soundEngine.stopAllRaceAudio();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!room || !commentatorRef.current) return;
-    commentatorRef.current.updateSnapshot({
-      roomCode: room.code,
-      roomName: room.name,
-      subject: room.subject,
-      grade: room.grade,
-      status: room.status,
-      totalLaps,
-      questionCount: totalQuestions,
-      players,
-    });
-  }, [room, players, totalLaps, totalQuestions]);
 
   useEffect(() => {
     soundEngine.setVenue(activeVenue);
@@ -477,24 +451,33 @@ export function TeacherRoomMonitor({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            onClick={toggleCommentary}
-            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
-              commentaryEnabled
-                ? 'bg-[#FF6B1A]/20 border-[#FF6B1A]/60 text-[#FACC15]'
-                : 'bg-[#081226] border-white/15 text-slate-400'
-            }`}
-            title={commentaryEnabled ? 'Matikan Suara Komentator' : 'Aktifkan Suara Komentator'}
-          >
-            {commentaryEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-            <span>{commentaryEnabled ? 'Komentator ON' : 'Komentator OFF'}</span>
-          </button>
+          <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#081226] border border-white/15">
+            <button
+              onClick={toggleMusic}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                musicEnabled
+                  ? 'bg-[#FF6B1A]/20 text-[#FACC15]'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title={musicEnabled ? 'Matikan Musik Latar' : 'Aktifkan Musik Latar'}
+            >
+              <Music className="w-3.5 h-3.5" />
+              <span>{musicEnabled ? activeTrackMeta.title : 'Musik OFF'}</span>
+            </button>
+            <button
+              onClick={handleCycleTrack}
+              className="p-1.5 rounded-lg hover:bg-white/10 text-blue-200 hover:text-[#FACC15] cursor-pointer"
+              title={`Ganti Lagu (Saat ini: ${activeTrackMeta.title} · ${activeTrackMeta.subtitle})`}
+            >
+              <SkipForward className="w-3.5 h-3.5" />
+            </button>
+          </div>
 
           <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#081226] border border-white/15">
             <button
               onClick={toggleMute}
               className="text-white hover:text-[#FACC15] cursor-pointer"
-              title={muted ? 'Aktifkan Suara Stadion' : 'Matikan Suara Stadion'}
+              title={muted ? 'Aktifkan Musik & Suara' : 'Matikan Semua Suara'}
             >
               {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>
@@ -505,7 +488,7 @@ export function TeacherRoomMonitor({
               step={0.05}
               value={muted ? 0 : volume}
               onChange={(e) => handleVolumeChange(Number(e.target.value))}
-              aria-label="Volume Audio Stadion"
+              aria-label="Volume Musik Pertandingan"
               className="w-16 accent-[#FF6B1A] cursor-pointer"
             />
           </div>
@@ -606,6 +589,10 @@ export function TeacherRoomMonitor({
               roomStatus={room.status}
               roomName={room.name}
               cameraPreset={cameraPreset}
+              cameraViewMode={cameraViewMode}
+              pipPlacement="bottom-row"
+              onSelectCameraPreset={setCameraPreset}
+              onChangeCameraViewMode={setCameraViewMode}
               venue={venueOverride ?? room.settings.venue ?? 'stadium_day'}
             />
           )}
@@ -614,45 +601,56 @@ export function TeacherRoomMonitor({
             <StadiumCountdownOverlay value={countdownVal} total={countdownTotal} />
           )}
 
-          {commentaryEnabled && countdownVal === null && (commentatorCaption || commentatorError) && (
-            <div className="absolute top-4 left-4 right-4 z-20 flex justify-center pointer-events-none">
-              <div className="max-w-2xl px-4 py-2 rounded-xl bg-[#081226]/92 border border-[#FACC15]/40 text-xs sm:text-sm shadow-xl">
-                {commentatorError ? (
-                  <span className="text-amber-300 font-medium">{commentatorError}</span>
-                ) : commentatorCaption ? (
-                  <div className="flex items-baseline gap-2.5">
-                    <span className="font-mono font-bold uppercase text-[#FF6B1A] shrink-0">
-                      {commentatorCaption.speaker}:
-                    </span>
-                    <span className="text-slate-100 leading-snug">{commentatorCaption.text}</span>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          )}
-
-          <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-            <div className="flex flex-wrap items-center gap-2 pointer-events-auto">
-              {(['broadcast', 'chase', 'finish'] as const).map((preset) => (
+          <div className="absolute bottom-3 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+            <div className="flex flex-wrap items-center gap-1.5 pointer-events-auto">
+              {CAMERA_PRESET_LIST.map((cam) => (
                 <button
-                  key={preset}
-                  onClick={() => setCameraPreset(preset)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
-                    cameraPreset === preset
+                  key={cam.id}
+                  type="button"
+                  onClick={() => {
+                    setCameraPreset(cam.id);
+                    if (cameraViewMode === 'quad') setCameraViewMode('single');
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                    cameraPreset === cam.id && cameraViewMode !== 'quad'
                       ? 'bg-[#FF6B1A] text-white'
-                      : 'bg-[#081226]/90 border border-white/20 text-slate-200'
+                      : 'bg-[#081226]/92 border border-white/20 text-slate-200 hover:bg-[#0F2957]'
                   }`}
+                  title={`${cam.camCode} · ${cam.label}`}
                 >
                   <Camera className="w-3.5 h-3.5" />
-                  <span className="capitalize">
-                    {preset === 'broadcast' ? 'Kamera Stadion' : preset === 'chase' ? 'Ikuti Pemimpin' : 'Garis Finish'}
-                  </span>
+                  <span className="font-mono text-[11px] opacity-90">{cam.camCode}</span>
+                  <span className="hidden sm:inline">{cam.shortLabel}</span>
                 </button>
               ))}
+
+              <button
+                type="button"
+                onClick={() =>
+                  setCameraViewMode((prev) =>
+                    prev === 'single' ? 'pip' : prev === 'pip' ? 'quad' : 'single'
+                  )
+                }
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer border ${
+                  cameraViewMode !== 'single'
+                    ? 'bg-[#1D4ED8] border-blue-400/50 text-white'
+                    : 'bg-[#081226]/92 border-white/20 text-slate-200 hover:bg-[#0F2957]'
+                }`}
+                title="Ubah tampilan Live Preview 4 Kamera (PiP / Grid 2x2 / 1 Layar)"
+              >
+                <Grid2x2 className="w-3.5 h-3.5 text-[#FACC15]" />
+                <span>
+                  {cameraViewMode === 'quad'
+                    ? 'Grid 2×2'
+                    : cameraViewMode === 'pip'
+                    ? 'Live 4 Cam'
+                    : 'Buka 4 Cam'}
+                </span>
+              </button>
             </div>
 
             {room && (
-              <div className="inline-flex items-center p-1 rounded-xl bg-[#081226]/90 border border-white/20 pointer-events-auto">
+              <div className="inline-flex items-center p-1 rounded-xl bg-[#081226]/92 border border-white/20 pointer-events-auto">
                 {RACE_VENUES.map((v) => {
                   const activeVenue = venueOverride ?? room.settings.venue ?? 'stadium_day';
                   const active = activeVenue === v.id;

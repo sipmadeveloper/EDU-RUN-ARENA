@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, type MutableRefObject } from 'react';
+import { memo, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
+import { Camera, Grid2x2, Maximize2, X } from 'lucide-react';
 import { AVATAR_COLORS, type PlayerState, type RaceVenueId, type RoomStatus } from '../types/game';
 import {
   createStadium,
@@ -32,6 +33,24 @@ import {
 import { calcTrackLength } from '../utils/matchScaling';
 import { subscribeStadiumLedConfig } from '../services/stadiumLedStore';
 
+export type CameraPresetId = 'broadcast' | 'chase' | 'side' | 'finish';
+export type CameraViewMode = 'single' | 'pip' | 'quad';
+export type CameraPipPlacement = 'bottom-row' | 'right-grid' | 'top-row';
+
+export interface CameraPresetMeta {
+  id: CameraPresetId;
+  camCode: string;
+  label: string;
+  shortLabel: string;
+}
+
+export const CAMERA_PRESET_LIST: CameraPresetMeta[] = [
+  { id: 'broadcast', camCode: 'CAM 1', label: 'Udara Stadion', shortLabel: 'Udara' },
+  { id: 'chase', camCode: 'CAM 2', label: 'Ikuti Pembalap', shortLabel: 'Kejar' },
+  { id: 'side', camCode: 'CAM 3', label: 'Sisi Lintasan', shortLabel: 'Sisi' },
+  { id: 'finish', camCode: 'CAM 4', label: 'Garis Finish', shortLabel: 'Finish' },
+];
+
 interface StadiumArena3DProps {
   questionCount: number;
   maxPlayers: number;
@@ -41,10 +60,22 @@ interface StadiumArena3DProps {
   localPlayerId?: string;
   roomStatus: RoomStatus;
   roomName?: string;
-  cameraPreset?: 'chase' | 'broadcast' | 'finish';
+  cameraPreset?: CameraPresetId;
+  cameraViewMode?: CameraViewMode;
+  pipPlacement?: CameraPipPlacement;
+  onSelectCameraPreset?: (preset: CameraPresetId) => void;
+  onChangeCameraViewMode?: (mode: CameraViewMode) => void;
   venue?: RaceVenueId;
   showcaseMode?: boolean;
   onFinishConfetti?: () => void;
+}
+
+interface ViewportRect {
+  left: number;
+  bottom: number;
+  width: number;
+  height: number;
+  visible: boolean;
 }
 
 const _camTarget = new THREE.Vector3();
@@ -61,17 +92,27 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   roomStatus,
   roomName = 'EDU RUN ARENA 3D',
   cameraPreset = 'chase',
+  cameraViewMode = 'single',
+  pipPlacement = 'bottom-row',
+  onSelectCameraPreset,
+  onChangeCameraViewMode,
   venue = 'stadium_day',
   showcaseMode = false,
 }: StadiumArena3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const canvasHostRef = useRef<HTMLDivElement>(null);
+  const pipSlotRefs = useRef<Array<HTMLButtonElement | null>>([null, null, null, null]);
+  const pipRectsRef = useRef<ViewportRect[]>(
+    CAMERA_PRESET_LIST.map(() => ({ left: 0, bottom: 0, width: 0, height: 0, visible: false }))
+  );
 
   const playersRef = useRef<PlayerState[]>(players);
   const externalLivePlayersRef = useRef<MutableRefObject<PlayerState[]> | undefined>(livePlayersRef);
   const externalLiveVersionRef = useRef<MutableRefObject<number> | undefined>(liveVersionRef);
   const localIdRef = useRef<string | undefined>(localPlayerId);
   const statusRef = useRef<RoomStatus>(roomStatus);
-  const presetRef = useRef(cameraPreset);
+  const presetRef = useRef<CameraPresetId>(cameraPreset);
+  const viewModeRef = useRef<CameraViewMode>(cameraViewMode);
   const roomNameRef = useRef(roomName);
   const maxPlayersRef = useRef(maxPlayers);
   const venueRef = useRef<RaceVenueId>(venue);
@@ -83,28 +124,70 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   localIdRef.current = localPlayerId;
   statusRef.current = roomStatus;
   presetRef.current = cameraPreset;
+  viewModeRef.current = cameraViewMode;
   roomNameRef.current = roomName;
   maxPlayersRef.current = maxPlayers;
   venueRef.current = venue;
   dataVersionRef.current += 1;
 
+  const measurePipSlots = useCallback(() => {
+    const host = mountRef.current;
+    if (!host) return;
+    const hostRect = host.getBoundingClientRect();
+    const out = pipRectsRef.current;
+    for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
+      const el = pipSlotRefs.current[i];
+      if (!el) {
+        out[i].visible = false;
+        continue;
+      }
+      const r = el.getBoundingClientRect();
+      const w = Math.floor(r.width);
+      const h = Math.floor(r.height);
+      if (w < 12 || h < 12) {
+        out[i].visible = false;
+        continue;
+      }
+      const left = Math.max(0, Math.round(r.left - hostRect.left));
+      const bottom = Math.max(0, Math.round(hostRect.bottom - r.bottom));
+      out[i].left = left;
+      out[i].bottom = bottom;
+      out[i].width = Math.min(w, Math.max(0, Math.floor(hostRect.width - left)));
+      out[i].height = Math.min(h, Math.max(0, Math.floor(hostRect.height - bottom)));
+      out[i].visible = out[i].width >= 12 && out[i].height >= 12;
+    }
+  }, []);
+
   useEffect(() => {
-    const container = mountRef.current;
-    if (!container) return;
+    const id = requestAnimationFrame(measurePipSlots);
+    return () => cancelAnimationFrame(id);
+  }, [cameraViewMode, pipPlacement, measurePipSlots]);
+
+  useEffect(() => {
+    const container = canvasHostRef.current;
+    const rootEl = mountRef.current;
+    if (!container || !rootEl) return;
 
     const initialVenue = venueRef.current;
     const trackLength = calcTrackLength(questionCount);
     const scene = new THREE.Scene();
 
-    const camera = new THREE.PerspectiveCamera(
-      56,
-      (container.clientWidth || window.innerWidth) / (container.clientHeight || window.innerHeight),
-      0.2,
-      2400
-    );
+    const initW = container.clientWidth || window.innerWidth;
+    const initH = container.clientHeight || window.innerHeight;
+
+    const camera = new THREE.PerspectiveCamera(56, initW / initH, 0.2, 2400);
     const camLookCurrent = new THREE.Vector3(14, 2, 142);
     camera.position.set(-30, 16, 175);
     camera.lookAt(camLookCurrent);
+
+    // 4 persistent sub-cameras for live 4-angle multi-viewport preview (zero per-frame allocations)
+    const previewCameras = CAMERA_PRESET_LIST.map(() => {
+      const subCam = new THREE.PerspectiveCamera(54, 16 / 10, 0.2, 2400);
+      subCam.position.set(-30, 16, 175);
+      return subCam;
+    });
+    const previewLookCurrents = CAMERA_PRESET_LIST.map(() => new THREE.Vector3(14, 2, 142));
+    const previewInitialized = CAMERA_PRESET_LIST.map(() => false);
 
     const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
     const disposeEnv = applyStudioEnvironment(scene, renderer);
@@ -198,16 +281,21 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     let currentDpr = renderer.getPixelRatio();
     let shadowsAutoDisabled = false;
 
+    let viewportW = initW;
+    let viewportH = initH;
+    let frameCounter = 0;
+
     const handleResize = () => {
       if (!container) return;
-      const w = container.clientWidth || window.innerWidth;
-      const h = container.clientHeight || window.innerHeight;
-      camera.aspect = w / h;
+      viewportW = container.clientWidth || window.innerWidth;
+      viewportH = container.clientHeight || window.innerHeight;
+      camera.aspect = viewportW / Math.max(1, viewportH);
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderer.setSize(viewportW, viewportH);
+      measurePipSlots();
     };
     const resizeObs = new ResizeObserver(handleResize);
-    resizeObs.observe(container);
+    resizeObs.observe(rootEl);
 
     const getActivePlayers = () =>
       externalLivePlayersRef.current ? externalLivePlayersRef.current.current : playersRef.current;
@@ -732,88 +820,230 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         }
       }
 
-      // Smooth dual-damped camera choreography around the Oval Stadium
+      // Unified 4-position camera solver (zero per-frame allocations)
       const startPose = finishPose;
-      let camDamp = 6.0;
+      const focusRunner = localTarget
+        ? localTarget
+        : leaderPose
+        ? { pose: leaderPose, effect: leaderPlayer?.effectState || 'normal', finished: false }
+        : { pose: startPose, effect: 'normal', finished: false };
 
-      if (showcaseMode) {
-        const camOrbitAngle = elapsed * 0.12 - 0.52;
-        _camDesired.set(Math.sin(camOrbitAngle) * 515, 112, Math.cos(camOrbitAngle) * 335);
-        _camTarget.set(0, 16, 0);
-        camDamp = 3.2;
-      } else if (status === 'waiting') {
-        _camDesired.set(startPose.x - 30 + Math.sin(elapsed * 0.25) * 6, 12.5, startPose.z + 17);
-        _camTarget.set(startPose.x + 14, 3.0, startPose.z - 2);
-        camDamp = 4.0;
-      } else if (status === 'countdown') {
-        const focus = localTarget ? localTarget.pose : startPose;
-        _camDesired.set(focus.x - focus.fx * 7.4, 3.6, focus.z - focus.fz * 7.4 + 1.8);
-        _camTarget.set(focus.x + focus.fx * 5.0, -0.7, focus.z + focus.fz * 5.0);
-        camDamp = 6.5;
-      } else if (inCeremony) {
-        if (medalStage && medalStage.focusPoint && medalStage.phase !== 'complete') {
-          const sideOffset = medalStage.activeRank === 2 ? 2.6 : -2.6;
-          _camDesired.set(
-            medalStage.focusPoint.x + sideOffset,
-            medalStage.focusPoint.y + 1.05,
-            medalStage.focusPoint.z + 6.4
-          );
-          _camTarget.set(
-            medalStage.focusPoint.x,
-            medalStage.focusPoint.y - 0.05,
-            medalStage.focusPoint.z
-          );
-          camDamp = 3.8;
-        } else {
-          const heroZoom = THREE.MathUtils.clamp((ceremonyElapsed - 1.2) / 2.6, 0, 1);
-          const sway = Math.sin(ceremonyElapsed * 0.36) * 2.8;
-          _camDesired.set(
-            0.3 + sway * heroZoom,
-            THREE.MathUtils.lerp(6.2, 4.4, heroZoom),
-            THREE.MathUtils.lerp(20.5, 13.8, heroZoom)
-          );
-          _camTarget.set(0.3, THREE.MathUtils.lerp(1.7, 2.35, heroZoom), THREE.MathUtils.lerp(5.5, -0.5, heroZoom));
-          camDamp = 4.0;
-        }
-      } else if (presetRef.current === 'finish' || localTarget?.finished) {
-        const focus = localTarget?.finished ? localTarget.pose : startPose;
-        _camDesired.set(
-          focus.x + focus.fx * 9 + Math.sin(elapsed * 0.6) * 4,
-          4.5,
-          focus.z + focus.fz * 9 + 5
-        );
-        _camTarget.set(focus.x, 1.4, focus.z);
-        camDamp = 4.5;
-      } else if (presetRef.current === 'broadcast') {
-        const focus = leaderPose || startPose;
-        _camDesired.set(focus.x * 0.65, 78, focus.z * 0.65);
-        _camTarget.set(focus.x, 1.5, focus.z);
-        camDamp = 4.2;
-      } else {
-        const targetRunner = localTarget
-          ? localTarget
-          : leaderPose
-          ? { pose: leaderPose, effect: leaderPlayer?.effectState || 'normal' }
-          : { pose: startPose, effect: 'normal' };
-
-        const targetFov = targetRunner.effect === 'boost' ? 65 : targetRunner.effect === 'penalty' ? 50 : 56;
-        if (Math.abs(camera.fov - targetFov) > 0.08) {
-          camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 6, dt);
-          camera.updateProjectionMatrix();
+      const computePresetCamera = (
+        preset: CameraPresetId,
+        allowStatusOverride: boolean,
+        outPos: THREE.Vector3,
+        outLook: THREE.Vector3
+      ): { fov: number; damp: number } => {
+        // Status-driven dramatic framing for the main camera during waiting/countdown/ceremony
+        if (allowStatusOverride && !showcaseMode) {
+          if (status === 'waiting') {
+            outPos.set(startPose.x - 30 + Math.sin(elapsed * 0.25) * 6, 12.5, startPose.z + 17);
+            outLook.set(startPose.x + 14, 3.0, startPose.z - 2);
+            return { fov: 56, damp: 4.0 };
+          }
+          if (status === 'countdown') {
+            const focus = localTarget ? localTarget.pose : startPose;
+            outPos.set(focus.x - focus.fx * 7.4, 3.6, focus.z - focus.fz * 7.4 + 1.8);
+            outLook.set(focus.x + focus.fx * 5.0, -0.7, focus.z + focus.fz * 5.0);
+            return { fov: 56, damp: 6.5 };
+          }
+          if (inCeremony) {
+            if (medalStage && medalStage.focusPoint && medalStage.phase !== 'complete') {
+              const sideOffset = medalStage.activeRank === 2 ? 2.6 : -2.6;
+              outPos.set(
+                medalStage.focusPoint.x + sideOffset,
+                medalStage.focusPoint.y + 1.05,
+                medalStage.focusPoint.z + 6.4
+              );
+              outLook.set(
+                medalStage.focusPoint.x,
+                medalStage.focusPoint.y - 0.05,
+                medalStage.focusPoint.z
+              );
+              return { fov: 54, damp: 3.8 };
+            }
+            const heroZoom = THREE.MathUtils.clamp((ceremonyElapsed - 1.2) / 2.6, 0, 1);
+            const sway = Math.sin(ceremonyElapsed * 0.36) * 2.8;
+            outPos.set(
+              0.3 + sway * heroZoom,
+              THREE.MathUtils.lerp(6.2, 4.4, heroZoom),
+              THREE.MathUtils.lerp(20.5, 13.8, heroZoom)
+            );
+            outLook.set(
+              0.3,
+              THREE.MathUtils.lerp(1.7, 2.35, heroZoom),
+              THREE.MathUtils.lerp(5.5, -0.5, heroZoom)
+            );
+            return { fov: 54, damp: 4.0 };
+          }
         }
 
-        const p = targetRunner.pose;
-        _camDesired.set(p.x - p.fx * 9.4, 4.35, p.z - p.fz * 9.4);
-        _camTarget.set(p.x + p.fx * 4.2, -1.65, p.z + p.fz * 4.2);
-        camDamp = 9.0;
+        // 1) CAM 1 — Udara Stadion (Aerial Wide Broadcast)
+        if (preset === 'broadcast') {
+          if (showcaseMode) {
+            const camOrbitAngle = elapsed * 0.12 - 0.52;
+            outPos.set(Math.sin(camOrbitAngle) * 515, 112, Math.cos(camOrbitAngle) * 335);
+            outLook.set(0, 16, 0);
+            return { fov: 54, damp: 3.2 };
+          }
+          const focus = leaderPose || startPose;
+          outPos.set(focus.x * 0.62, 78, focus.z * 0.62);
+          outLook.set(focus.x, 1.5, focus.z);
+          return { fov: 54, damp: 4.2 };
+        }
+
+        // 2) CAM 3 — Sisi Lintasan (Infield Rail Dolly Tracking Cam — 100% unobstructed)
+        if (preset === 'side') {
+          const p = focusRunner.pose;
+          const inX = p.fz;
+          const inZ = -p.fx;
+          outPos.set(p.x + inX * 23 + p.fx * 15, 6.0, p.z + inZ * 23 + p.fz * 15);
+          outLook.set(p.x + p.fx * 2.5, 1.55, p.z + p.fz * 2.5);
+          return { fov: 46, damp: 6.2 };
+        }
+
+        // 3) CAM 4 — Garis Finish (Start/Finish Gantry / Podium Angle)
+        if (preset === 'finish' || (allowStatusOverride && localTarget?.finished)) {
+          if (inCeremony) {
+            const sway = Math.sin(ceremonyElapsed * 0.4) * 3.2;
+            outPos.set(0.3 + sway, 4.9, 15.2);
+            outLook.set(0.3, 2.2, -0.4);
+            return { fov: 52, damp: 4.2 };
+          }
+          if (localTarget?.finished) {
+            const focus = localTarget.pose;
+            outPos.set(
+              focus.x + focus.fx * 9 + Math.sin(elapsed * 0.6) * 4,
+              4.5,
+              focus.z + focus.fz * 9 + 5
+            );
+            outLook.set(focus.x, 1.4, focus.z);
+            return { fov: 54, damp: 4.5 };
+          }
+          outPos.set(
+            startPose.x + startPose.fx * 28 + Math.sin(elapsed * 0.35) * 3.5,
+            8.2,
+            startPose.z + startPose.fz * 28 - 19
+          );
+          outLook.set(startPose.x - startPose.fx * 8, 2.1, startPose.z + 2);
+          return { fov: 50, damp: 4.5 };
+        }
+
+        // 4) CAM 2 — Ikuti Pembalap (Low Action Chase Cam)
+        const p = focusRunner.pose;
+        const targetFov =
+          focusRunner.effect === 'boost' ? 64 : focusRunner.effect === 'penalty' ? 50 : 56;
+        const lookY = showcaseMode || !localTarget ? 1.15 : -1.65;
+        outPos.set(p.x - p.fx * 9.4, 4.35, p.z - p.fz * 9.4);
+        outLook.set(p.x + p.fx * 4.2, lookY, p.z + p.fz * 4.2);
+        return { fov: targetFov, damp: 9.0 };
+      };
+
+      const viewMode = viewModeRef.current;
+      const w = viewportW || container.clientWidth || window.innerWidth;
+      const h = viewportH || container.clientHeight || window.innerHeight;
+      frameCounter += 1;
+
+      if (viewMode === 'pip' && frameCounter % 15 === 0) {
+        measurePipSlots();
       }
 
-      const camAlpha = 1 - Math.exp(-camDamp * dt);
-      camera.position.lerp(_camDesired, camAlpha);
-      camLookCurrent.lerp(_camTarget, camAlpha);
-      camera.lookAt(camLookCurrent);
+      const updateSubCamera = (idx: number, preset: CameraPresetId, aspect: number) => {
+        const subCam = previewCameras[idx];
+        const lookVec = previewLookCurrents[idx];
+        const cfg = computePresetCamera(preset, false, _camDesired, _camTarget);
+        if (!previewInitialized[idx]) {
+          subCam.position.copy(_camDesired);
+          lookVec.copy(_camTarget);
+          subCam.fov = cfg.fov;
+          subCam.aspect = aspect;
+          subCam.updateProjectionMatrix();
+          previewInitialized[idx] = true;
+        } else {
+          const alpha = 1 - Math.exp(-cfg.damp * dt);
+          subCam.position.lerp(_camDesired, alpha);
+          lookVec.lerp(_camTarget, alpha);
+          let projDirty = false;
+          if (Math.abs(subCam.fov - cfg.fov) > 0.12) {
+            subCam.fov = THREE.MathUtils.damp(subCam.fov, cfg.fov, 6, dt);
+            projDirty = true;
+          }
+          if (Math.abs(subCam.aspect - aspect) > 0.005) {
+            subCam.aspect = aspect;
+            projDirty = true;
+          }
+          if (projDirty) subCam.updateProjectionMatrix();
+        }
+        subCam.lookAt(lookVec);
+      };
 
-      renderer.render(scene, camera);
+      if (viewMode === 'quad') {
+        const halfW = Math.floor(w / 2);
+        const halfH = Math.floor(h / 2);
+        const topH = h - halfH;
+        const rightW = w - halfW;
+        // WebGL (0,0) is bottom-left: Top-Left = CAM 1, Top-Right = CAM 2, Bottom-Left = CAM 3, Bottom-Right = CAM 4
+        const quadCells: Array<[number, number, number, number]> = [
+          [0, halfH, halfW, topH],
+          [halfW, halfH, rightW, topH],
+          [0, 0, halfW, halfH],
+          [halfW, 0, rightW, halfH],
+        ];
+        const prevShadowAuto = renderer.shadowMap.autoUpdate;
+        renderer.setScissorTest(true);
+        for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
+          const [vx, vy, vw, vh] = quadCells[i];
+          if (vw < 4 || vh < 4) continue;
+          updateSubCamera(i, CAMERA_PRESET_LIST[i].id, vw / vh);
+          renderer.setViewport(vx, vy, vw, vh);
+          renderer.setScissor(vx, vy, vw, vh);
+          // Compute shadow map once on pass 0 and reuse across passes 1..3
+          renderer.shadowMap.autoUpdate = i === 0 ? prevShadowAuto : false;
+          renderer.render(scene, previewCameras[i]);
+        }
+        renderer.shadowMap.autoUpdate = prevShadowAuto;
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+      } else {
+        // Main camera pass (single or pip base)
+        const mainCfg = computePresetCamera(presetRef.current, true, _camDesired, _camTarget);
+        if (Math.abs(camera.fov - mainCfg.fov) > 0.08) {
+          camera.fov = THREE.MathUtils.damp(camera.fov, mainCfg.fov, 6, dt);
+          camera.updateProjectionMatrix();
+        }
+        const camAlpha = 1 - Math.exp(-mainCfg.damp * dt);
+        camera.position.lerp(_camDesired, camAlpha);
+        camLookCurrent.lerp(_camTarget, camAlpha);
+        camera.lookAt(camLookCurrent);
+
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+        renderer.render(scene, camera);
+
+        // Optional 4 live mini preview viewports rendered directly inside the same WebGL canvas
+        if (viewMode === 'pip') {
+          const rects = pipRectsRef.current;
+          const prevShadowAuto = renderer.shadowMap.autoUpdate;
+          const prevAutoClear = renderer.autoClear;
+          renderer.shadowMap.autoUpdate = false;
+          renderer.autoClear = false;
+          renderer.setScissorTest(true);
+          for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
+            const r = rects[i];
+            if (!r || !r.visible || r.width < 12 || r.height < 12) continue;
+            updateSubCamera(i, CAMERA_PRESET_LIST[i].id, r.width / r.height);
+            renderer.setViewport(r.left, r.bottom, r.width, r.height);
+            renderer.setScissor(r.left, r.bottom, r.width, r.height);
+            renderer.clearDepth();
+            renderer.render(scene, previewCameras[i]);
+          }
+          renderer.setScissorTest(false);
+          renderer.setViewport(0, 0, w, h);
+          renderer.autoClear = prevAutoClear;
+          renderer.shadowMap.autoUpdate = prevShadowAuto;
+        }
+      }
+
       if (isSoftwareGl) {
         frameId = afterDraw(renderer, tick);
       } else {
@@ -844,7 +1074,123 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         container.removeChild(renderer.domElement);
       }
     };
-  }, [questionCount, showcaseMode]);
+  }, [questionCount, showcaseMode, measurePipSlots]);
 
-  return <div ref={mountRef} className="w-full h-full relative overflow-hidden" />;
+  const pipContainerClass =
+    pipPlacement === 'right-grid'
+      ? 'absolute bottom-14 left-3 right-3 sm:left-6 sm:right-6 lg:left-auto lg:right-6 xl:right-10 lg:top-1/2 lg:bottom-auto lg:-translate-y-1/2 lg:w-[390px] xl:w-[448px] z-20 pointer-events-auto'
+      : pipPlacement === 'top-row'
+      ? 'absolute top-[86px] left-2.5 right-2.5 sm:left-auto sm:right-3 sm:w-[460px] z-20 pointer-events-auto'
+      : 'absolute bottom-[60px] left-3 right-3 z-20 pointer-events-auto';
+
+  const pipGridClass =
+    pipPlacement === 'right-grid'
+      ? 'grid grid-cols-4 lg:grid-cols-2 gap-1.5 sm:gap-2'
+      : 'grid grid-cols-4 gap-1.5 sm:gap-2';
+
+  return (
+    <div ref={mountRef} className="w-full h-full relative overflow-hidden">
+      {/* Isolated WebGL Canvas Host */}
+      <div ref={canvasHostRef} className="absolute inset-0" />
+
+      {/* Live 4-Camera 2x2 Broadcast Grid Overlay */}
+      {cameraViewMode === 'quad' && (
+        <div className="absolute inset-0 z-20 grid grid-cols-2 grid-rows-2 pointer-events-none">
+          {CAMERA_PRESET_LIST.map((cam) => {
+            const isActive = cameraPreset === cam.id;
+            return (
+              <button
+                key={cam.id}
+                type="button"
+                onClick={() => {
+                  onSelectCameraPreset?.(cam.id);
+                  onChangeCameraViewMode?.('single');
+                }}
+                className={`relative pointer-events-auto group border transition-colors cursor-pointer text-left ${
+                  isActive
+                    ? 'border-[#FF6B1A] ring-2 ring-inset ring-[#FF6B1A]/75'
+                    : 'border-white/25 hover:border-[#FACC15]'
+                }`}
+                title={`Fokus ke ${cam.camCode} · ${cam.label}`}
+              >
+                <div className="absolute top-2 left-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#081226]/90 border border-white/20 text-[11px] font-bold text-white">
+                  <Camera className="w-3 h-3 text-[#FF6B1A]" />
+                  <span className="font-mono text-[#FACC15]">{cam.camCode}</span>
+                  <span className="hidden sm:inline text-slate-200 font-semibold">· {cam.label}</span>
+                </div>
+                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#081226]/90 border border-white/20 text-[10px] font-semibold text-white">
+                  <Maximize2 className="w-3 h-3 text-[#FACC15]" />
+                  <span>Layar Penuh</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Live 4-Camera PiP Preview Strip / Panel Overlay */}
+      {cameraViewMode === 'pip' && (
+        <div className={pipContainerClass}>
+          <div className="flex items-center justify-between gap-2 mb-1.5 px-2.5 py-1 rounded-lg bg-[#081226]/90 border border-blue-400/30">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white">
+              <Camera className="w-3.5 h-3.5 text-[#FF6B1A]" />
+              <span>LIVE PREVIEW 4 KAMERA</span>
+            </div>
+            <div className="inline-flex items-center gap-1">
+              {onChangeCameraViewMode && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onChangeCameraViewMode('quad')}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0F2957] hover:bg-blue-700 text-[10px] font-semibold text-blue-100 cursor-pointer"
+                    title="Tampilkan 4 Kamera Penuh (Grid 2x2)"
+                  >
+                    <Grid2x2 className="w-3 h-3 text-[#FACC15]" />
+                    <span>2×2</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeCameraViewMode('single')}
+                    className="p-0.5 rounded bg-[#0F2957] hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                    title="Sembunyikan Preview 4 Kamera"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className={pipGridClass}>
+            {CAMERA_PRESET_LIST.map((cam, idx) => {
+              const isActive = cameraPreset === cam.id;
+              return (
+                <button
+                  key={cam.id}
+                  ref={(el) => {
+                    pipSlotRefs.current[idx] = el;
+                  }}
+                  type="button"
+                  onClick={() => onSelectCameraPreset?.(cam.id)}
+                  className={`relative aspect-[16/10] w-full rounded-lg overflow-hidden border-2 transition-colors cursor-pointer bg-transparent ${
+                    isActive
+                      ? 'border-[#FF6B1A] shadow-md shadow-orange-950/60'
+                      : 'border-white/30 hover:border-[#FACC15]'
+                  }`}
+                  title={`Pilih ${cam.camCode}: ${cam.label}`}
+                >
+                  <div className="absolute inset-x-0 bottom-0 px-1.5 py-0.5 bg-[#081226]/88 flex items-center justify-between gap-1 text-[10px] leading-tight">
+                    <span className={`font-mono font-bold ${isActive ? 'text-[#FACC15]' : 'text-cyan-300'}`}>
+                      {cam.camCode}
+                    </span>
+                    <span className="text-white font-semibold truncate">{cam.shortLabel}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 });

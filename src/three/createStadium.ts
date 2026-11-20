@@ -271,8 +271,8 @@ export function createStadium(
   const trackGeo = buildOvalRibbonGeometry(innerR, outerR, straightLen, 320, 120);
   const trackMat = new THREE.MeshStandardMaterial({
     map: trackTex,
-    roughness: 0.75,
-    metalness: 0.04,
+    roughness: 0.86,
+    metalness: 0.02,
   });
   const trackMesh = new THREE.Mesh(trackGeo, trackMat);
   trackMesh.position.y = 0.03;
@@ -1070,14 +1070,14 @@ export function createStadium(
     metalness: 0.25,
     roughness: 0.2,
     emissive: new THREE.Color(0xfef9c3),
-    emissiveIntensity: venue === 'stadium_night' ? 2.6 : 0,
+    emissiveIntensity: venue === 'stadium_night' ? 1.9 : 0,
   });
   const haloTex = createFloodlightHaloTexture();
   const haloMat = new THREE.SpriteMaterial({
     map: haloTex,
     color: 0xfefce8,
     transparent: true,
-    opacity: venue === 'stadium_night' ? 0.9 : 0,
+    opacity: venue === 'stadium_night' ? 0.68 : 0,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
@@ -1086,7 +1086,7 @@ export function createStadium(
   // Soft gradient ShaderMaterial volumetric haze cones (zero rigid cone edges)
   const beamGeo = new THREE.ConeGeometry(58, 108, 22, 1, true);
   const beamUniforms = {
-    uOpacity: { value: venue === 'stadium_night' ? 0.13 : 0 },
+    uOpacity: { value: venue === 'stadium_night' ? 0.055 : 0 },
   };
   const beamMat = new THREE.ShaderMaterial({
     uniforms: beamUniforms,
@@ -1879,6 +1879,12 @@ export function createStadium(
   populateSpectatorsGroup(stadiumGroup, stadiumPlacements);
   populateSpectatorsGroup(openFieldGroup, fieldPlacements);
 
+  const daySurfaceTint = new THREE.Color(0xffffff);
+  const nightTrackTint = new THREE.Color(0xa69ca4);
+  const nightInfieldTint = new THREE.Color(0xb2c2d0);
+  const dayCurbTint = new THREE.Color(0xf8fafc);
+  const nightCurbTint = new THREE.Color(0x94a3b8);
+
   function applyThemeWeights(w: ThemeWeights) {
     blendThemeColor(extMat.color, w, (p) => p.extGroundColor);
     blendThemeColor(apronMat.color, w, (p) => p.apronColor);
@@ -1896,13 +1902,17 @@ export function createStadium(
     openFieldGroup.position.y = -36 * Math.pow(1 - openPresence, 2);
 
     const nightVis = THREE.MathUtils.clamp(w.night, 0, 1);
-    lampMat.emissiveIntensity = nightVis * 2.6;
-    haloMat.opacity = nightVis * 0.9;
-    vipWallMat.emissiveIntensity = 0.2 + nightVis * 0.6;
-    facadeAccentMat.emissiveIntensity = 0.28 + nightVis * 1.35;
+    trackMat.color.copy(daySurfaceTint).lerp(nightTrackTint, nightVis);
+    infieldMat.color.copy(daySurfaceTint).lerp(nightInfieldTint, nightVis);
+    curbMat.color.copy(dayCurbTint).lerp(nightCurbTint, nightVis);
+
+    lampMat.emissiveIntensity = nightVis * 1.9;
+    haloMat.opacity = nightVis * 0.68;
+    vipWallMat.emissiveIntensity = 0.2 + nightVis * 0.55;
+    facadeAccentMat.emissiveIntensity = 0.28 + nightVis * 1.1;
     // Perimeter LED self-illuminated material remains vibrant day & night without emissive recalculation
-    sfBannerMat.emissiveIntensity = 0.4 + nightVis * 0.55;
-    beamUniforms.uOpacity.value = nightVis * 0.13;
+    sfBannerMat.emissiveIntensity = 0.4 + nightVis * 0.42;
+    beamUniforms.uOpacity.value = nightVis * 0.055;
     moonMat.opacity = nightVis;
     starMat.opacity = nightVis;
     nightExtrasGroup.visible = nightVis > 0.01;

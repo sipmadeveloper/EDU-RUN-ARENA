@@ -56,24 +56,24 @@ export const ENVIRONMENT_THEMES: Record<RaceVenueId, EnvironmentThemePreset> = {
   stadium_night: {
     id: 'stadium_night',
     skyColor: new THREE.Color(0x040b1e),
-    fogColor: new THREE.Color(0x081533),
-    fogDensity: 0.00068,
-    hemiSkyColor: new THREE.Color(0x4f7cc4),
-    hemiGroundColor: new THREE.Color(0x091124),
-    hemiIntensity: 0.6,
-    keyColor: new THREE.Color(0xc7d2fe),
-    keyIntensity: 0.72,
+    fogColor: new THREE.Color(0x07122b),
+    fogDensity: 0.00062,
+    hemiSkyColor: new THREE.Color(0x3b63a8),
+    hemiGroundColor: new THREE.Color(0x080f1f),
+    hemiIntensity: 0.38,
+    keyColor: new THREE.Color(0xa5b4fc),
+    keyIntensity: 0.42,
     keyPosition: new THREE.Vector3(-90, 180, -120),
     rimColor: new THREE.Color(0x38bdf8),
-    rimIntensity: 0.92,
-    environmentIntensity: 0.44,
-    exposure: 1.24,
-    floodlightIntensity: 520,
-    extGroundColor: new THREE.Color(0x0a1730),
-    apronColor: new THREE.Color(0x1e293b),
-    standTierColor: new THREE.Color(0x1e293b),
-    standStepColor: new THREE.Color(0x334155),
-    canopyColor: new THREE.Color(0x0f2957),
+    rimIntensity: 0.52,
+    environmentIntensity: 0.26,
+    exposure: 0.94,
+    floodlightIntensity: 135,
+    extGroundColor: new THREE.Color(0x081328),
+    apronColor: new THREE.Color(0x172133),
+    standTierColor: new THREE.Color(0x1a2436),
+    standStepColor: new THREE.Color(0x2b394f),
+    canopyColor: new THREE.Color(0x0d2247),
   },
   open_field: {
     id: 'open_field',
@@ -209,12 +209,12 @@ export function createSceneLightingRig(
 
   const floodlights = floodSpots.map((cfg) => {
     const spot = new THREE.SpotLight(
-      0xfefce8,
-      initialPreset.floodlightIntensity * 1.55,
-      760,
-      1.24,
-      0.96,
-      0.68
+      0xe8f0ff,
+      initialPreset.floodlightIntensity,
+      740,
+      1.18,
+      0.95,
+      1.15
     );
     spot.position.set(...cfg.pos);
     spot.target.position.set(...cfg.target);
@@ -263,7 +263,7 @@ export function createSceneLightingRig(
 
     const floodPower = blendThemeScalar(w, (p) => p.floodlightIntensity);
     for (const spot of floodlights) {
-      spot.intensity = floodPower * 1.55;
+      spot.intensity = floodPower;
       spot.visible = floodPower > 0.5;
     }
   };
