@@ -1,0 +1,413 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==================== GLOBAL HARDENED PRIMITIVES ====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    // Bootstrapped Admin (verified email strictly required to block email spoofing)
+    function isBootstrapAdmin() {
+      return isVerifiedUser()
+        && request.auth.token.email == 'sipmadeveloper@gmail.com';
+    }
+
+    // Full Admin check (bootstrap admin OR trusted /admins/{uid} registry doc)
+    function isAdmin() {
+      return isBootstrapAdmin()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function teacherProfileExists(teacherId) {
+      return exists(/databases/$(database)/documents/teachers/$(teacherId));
+    }
+
+    // ==================== VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP) ====================
+    function isValidAdminAccount(data, adminId) {
+      return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt'])
+      && data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt'])
+      && isValidId(data.uid)
+      && data.uid == adminId
+      && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+      && isValidId(data.grantedBy)
+      && data.grantedBy == request.auth.uid
+      && data.createdAt is timestamp;
+    }
+
+    function isValidStadiumLedConfig(data) {
+      return data.keys().hasAll([
+        'enabled',
+        'brightness',
+        'repeatCount',
+        'approxBytes',
+        'slides',
+        'updatedBy',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'enabled',
+        'brightness',
+        'repeatCount',
+        'approxBytes',
+        'slides',
+        'updatedBy',
+        'updatedAt'
+      ])
+      && data.enabled is bool
+      && (data.brightness is int || data.brightness is float)
+      && data.brightness >= 0.6 && data.brightness <= 1.4
+      && data.repeatCount is int && data.repeatCount >= 12 && data.repeatCount <= 40
+      && data.approxBytes is int && data.approxBytes >= 0 && data.approxBytes <= 320000
+      && data.slides is list
+      && data.slides.size() >= 1 && data.slides.size() <= 10
+      && data.slides[0] is map
+      && isValidId(data.updatedBy)
+      && data.updatedBy == request.auth.uid
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidTeacherProfile(data, teacherId) {
+      return data.keys().hasAll([
+        'ownerId',
+        'name',
+        'email',
+        'schoolName',
+        'maxArchivedMatches',
+        'retentionDays',
+        'defaultVenue',
+        'defaultQuestionCount',
+        'defaultMaxPlayers',
+        'defaultTimePerQuestion',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'ownerId',
+        'name',
+        'email',
+        'schoolName',
+        'maxArchivedMatches',
+        'retentionDays',
+        'defaultVenue',
+        'defaultQuestionCount',
+        'defaultMaxPlayers',
+        'defaultTimePerQuestion',
+        'createdAt',
+        'updatedAt'
+      ])
+      && isValidId(data.ownerId)
+      && data.ownerId == teacherId
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+      && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+      && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+      && data.maxArchivedMatches is int && data.maxArchivedMatches >= 5 && data.maxArchivedMatches <= 25
+      && data.retentionDays is int && data.retentionDays >= 7 && data.retentionDays <= 90
+      && data.defaultVenue is string && data.defaultVenue.size() >= 1 && data.defaultVenue.size() <= 20
+      && (data.defaultVenue == 'stadium_day' || data.defaultVenue == 'stadium_night' || data.defaultVenue == 'open_field')
+      && data.defaultQuestionCount is int && data.defaultQuestionCount >= 5 && data.defaultQuestionCount <= 100
+      && data.defaultMaxPlayers is int && data.defaultMaxPlayers >= 2 && data.defaultMaxPlayers <= 30
+      && data.defaultTimePerQuestion is int && data.defaultTimePerQuestion >= 5 && data.defaultTimePerQuestion <= 120
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidQuestionPack(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'packIndex',
+        'questionCount',
+        'approxBytes',
+        'questions',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'ownerId',
+        'packIndex',
+        'questionCount',
+        'approxBytes',
+        'questions',
+        'createdAt',
+        'updatedAt'
+      ])
+      && isValidId(data.ownerId)
+      && data.ownerId == request.auth.uid
+      && data.packIndex is int && data.packIndex >= 0 && data.packIndex <= 9
+      && data.questionCount is int && data.questionCount >= 0 && data.questionCount <= 50
+      && data.approxBytes is int && data.approxBytes >= 0 && data.approxBytes <= 250000
+      && data.questions is list
+      && data.questions.size() <= 50
+      && data.questions.size() == data.questionCount
+      && (data.questions.size() == 0 || data.questions[0] is map)
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidMatchArchive(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'roomCode',
+        'roomName',
+        'subject',
+        'grade',
+        'questionCount',
+        'totalLaps',
+        'participantCount',
+        'avgScore',
+        'championName',
+        'status',
+        'approxBytes',
+        'standings',
+        'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'ownerId',
+        'roomCode',
+        'roomName',
+        'subject',
+        'grade',
+        'questionCount',
+        'totalLaps',
+        'participantCount',
+        'avgScore',
+        'championName',
+        'status',
+        'approxBytes',
+        'standings',
+        'createdAt'
+      ])
+      && isValidId(data.ownerId)
+      && data.ownerId == request.auth.uid
+      && data.roomCode is string && data.roomCode.size() >= 4 && data.roomCode.size() <= 12 && data.roomCode.matches('^[A-Z0-9]+$')
+      && data.roomName is string && data.roomName.size() >= 1 && data.roomName.size() <= 100
+      && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60
+      && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 30
+      && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 100
+      && data.totalLaps is int && data.totalLaps >= 1 && data.totalLaps <= 20
+      && data.participantCount is int && data.participantCount >= 0 && data.participantCount <= 30
+      && (data.avgScore is int || data.avgScore is float) && data.avgScore >= 0 && data.avgScore <= 100
+      && data.championName is string && data.championName.size() <= 60
+      && data.status is string && data.status.size() <= 16 && data.status == 'archived'
+      && data.approxBytes is int && data.approxBytes >= 0 && data.approxBytes <= 64000
+      && data.standings is list
+      && data.standings.size() <= 30
+      && (data.standings.size() == 0 || data.standings[0] is map)
+      && data.createdAt is timestamp;
+    }
+
+    // ==================== COLLECTION: /admins/{adminId} ====================
+    // Trusted admin registry. Only bootstrap admin can manage admin records.
+    match /admins/{adminId} {
+      allow get: if (isOwner(adminId) || isBootstrapAdmin()) && isValidId(adminId);
+      allow list: if isBootstrapAdmin();
+
+      allow create: if isBootstrapAdmin()
+        && isValidId(adminId)
+        && isValidAdminAccount(incoming(), adminId)
+        && incoming().createdAt == request.time;
+
+      allow update: if false;
+
+      allow delete: if isBootstrapAdmin() && isValidId(adminId);
+    }
+
+    // ==================== COLLECTION: /settings/{settingId} ====================
+    // Public stadium display settings (zero PII). Strictly admin-only writes.
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'stadiumLed';
+      allow list: if false;
+
+      allow create: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'stadiumLed'
+        && isValidStadiumLedConfig(incoming())
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'stadiumLed'
+        && isValidStadiumLedConfig(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'enabled',
+          'brightness',
+          'repeatCount',
+          'approxBytes',
+          'slides',
+          'updatedBy',
+          'updatedAt'
+        ]);
+
+      allow delete: if isAdmin()
+        && isValidId(settingId)
+        && settingId == 'stadiumLed';
+    }
+
+    // ==================== COLLECTION: /teachers/{teacherId} ====================
+    // Contains PII (email). Strictly restricted to owner or verified Admin.
+    match /teachers/{teacherId} {
+      allow get: if (isOwner(teacherId) || isAdmin()) && isValidId(teacherId);
+
+      // Strictly restricted to verified bootstrap admin (zero get()/exists() in allow list)
+      allow list: if isBootstrapAdmin();
+
+      allow create: if isOwner(teacherId)
+        && isValidId(teacherId)
+        && isValidTeacherProfile(incoming(), teacherId)
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(teacherId)
+        && isValidTeacherProfile(incoming(), teacherId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Tier 1 (Admin): May update any teacher's auto-cleanup retention controls
+          (
+            isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'maxArchivedMatches',
+              'retentionDays',
+              'updatedAt'
+            ])
+          )
+          ||
+          // Tier 2 (Owner): May update own profile & settings
+          (
+            isOwner(teacherId)
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'schoolName', 'updatedAt'])
+              ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'maxArchivedMatches',
+                'retentionDays',
+                'defaultVenue',
+                'defaultQuestionCount',
+                'defaultMaxPlayers',
+                'defaultTimePerQuestion',
+                'updatedAt'
+              ])
+              ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name',
+                'schoolName',
+                'maxArchivedMatches',
+                'retentionDays',
+                'defaultVenue',
+                'defaultQuestionCount',
+                'defaultMaxPlayers',
+                'defaultTimePerQuestion',
+                'updatedAt'
+              ])
+            )
+          )
+        );
+
+      // Only verified Admin may remove a teacher cloud profile doc (after clearing subcollections)
+      allow delete: if isAdmin() && isValidId(teacherId);
+
+      // ==================== SUBCOLLECTION: questionPacks ====================
+      match /questionPacks/{packId} {
+        allow get: if (isOwner(teacherId) || isAdmin())
+          && isValidId(teacherId)
+          && isValidId(packId)
+          && existing().ownerId == teacherId
+          && teacherProfileExists(teacherId);
+
+        // Pillar 8: Secure list query enforced via resource.data without get()/exists()
+        allow list: if (isOwner(teacherId) && resource.data.ownerId == request.auth.uid)
+          || (isBootstrapAdmin() && resource.data.ownerId == teacherId);
+
+        allow create: if isOwner(teacherId)
+          && isValidId(teacherId)
+          && isValidId(packId)
+          && isValidQuestionPack(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && teacherProfileExists(teacherId);
+
+        allow update: if isOwner(teacherId)
+          && isValidId(teacherId)
+          && isValidId(packId)
+          && isValidQuestionPack(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().packIndex == existing().packIndex
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'questionCount',
+            'approxBytes',
+            'questions',
+            'updatedAt'
+          ])
+          && teacherProfileExists(teacherId);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(teacherId)
+          && isValidId(packId)
+          && existing().ownerId == teacherId
+          && ((isOwner(teacherId) && existing().ownerId == request.auth.uid) || isAdmin())
+          && teacherProfileExists(teacherId);
+      }
+
+      // ==================== SUBCOLLECTION: matchArchives ====================
+      match /matchArchives/{archiveId} {
+        allow get: if (isOwner(teacherId) || isAdmin())
+          && isValidId(teacherId)
+          && isValidId(archiveId)
+          && existing().ownerId == teacherId
+          && teacherProfileExists(teacherId);
+
+        // Pillar 8: Secure list query enforced via resource.data without get()/exists()
+        allow list: if (isOwner(teacherId) && resource.data.ownerId == request.auth.uid)
+          || (isBootstrapAdmin() && resource.data.ownerId == teacherId);
+
+        allow create: if isOwner(teacherId)
+          && isValidId(teacherId)
+          && isValidId(archiveId)
+          && isValidMatchArchive(incoming())
+          && incoming().createdAt == request.time
+          && teacherProfileExists(teacherId);
+
+        // Pillar 4.6: Terminal State Locking — archived matches are immutable
+        allow update: if false;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(teacherId)
+          && isValidId(archiveId)
+          && existing().ownerId == teacherId
+          && ((isOwner(teacherId) && existing().ownerId == request.auth.uid) || isAdmin())
+          && teacherProfileExists(teacherId);
+      }
+    }
+  }
+}

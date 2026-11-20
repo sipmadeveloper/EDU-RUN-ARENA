@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #081226;
+    color: #f8fafc;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono, .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom sleek scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(59, 130, 246, 0.4);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(59, 130, 246, 0.7);
+}
+
+/* ==================== 3D LOADING ANIMATIONS (GPU COMPOSITED) ==================== */
+.edurun-scene-3d {
+  perspective: 720px;
+}
+
+.edurun-preserve-3d {
+  transform-style: preserve-3d;
+}
+
+@keyframes edurun-cube-spin {
+  0% {
+    transform: rotateX(-24deg) rotateY(0deg) rotateZ(0deg);
+  }
+  50% {
+    transform: rotateX(-32deg) rotateY(180deg) rotateZ(6deg);
+  }
+  100% {
+    transform: rotateX(-24deg) rotateY(360deg) rotateZ(0deg);
+  }
+}
+
+@keyframes edurun-float-3d {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes edurun-track-orbit {
+  0% {
+    transform: rotateX(68deg) rotateZ(0deg);
+  }
+  100% {
+    transform: rotateX(68deg) rotateZ(360deg);
+  }
+}
+
+@keyframes edurun-track-orbit-rev {
+  0% {
+    transform: rotateX(68deg) rotateY(14deg) rotateZ(360deg);
+  }
+  100% {
+    transform: rotateX(68deg) rotateY(14deg) rotateZ(0deg);
+  }
+}
+
+@keyframes edurun-shadow-breath {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(0.76);
+    opacity: 0.28;
+  }
+}
+
+@keyframes edurun-bar-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.animate-edurun-cube {
+  animation: edurun-cube-spin 3.2s cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  will-change: transform;
+}
+
+.animate-edurun-float {
+  animation: edurun-float-3d 2.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+.animate-edurun-orbit {
+  animation: edurun-track-orbit 2.2s linear infinite;
+  will-change: transform;
+}
+
+.animate-edurun-orbit-rev {
+  animation: edurun-track-orbit-rev 3.4s linear infinite;
+  will-change: transform;
+}
+
+.animate-edurun-shadow {
+  animation: edurun-shadow-breath 2.4s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.animate-edurun-sweep {
+  animation: edurun-bar-sweep 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-edurun-cube,
+  .animate-edurun-float,
+  .animate-edurun-orbit,
+  .animate-edurun-orbit-rev,
+  .animate-edurun-shadow,
+  .animate-edurun-sweep {
+    animation: none !important;
+  }
+}
+

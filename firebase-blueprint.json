@@ -1,0 +1,349 @@
+{
+  "entities": {
+    "TeacherCloudProfile": {
+      "title": "Teacher Cloud Profile",
+      "description": "Compact teacher account metadata, default race settings, and Firebase Spark Free Tier retention controls.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the teacher who owns this profile."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Teacher display name."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified teacher email address (PII, owner-only readable)."
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "School or institution name."
+        },
+        "maxArchivedMatches": {
+          "type": "integer",
+          "description": "Auto-cleanup retention cap (between 5 and 25 matches) to keep Firestore Spark storage lean."
+        },
+        "retentionDays": {
+          "type": "integer",
+          "description": "Auto-cleanup age limit in days (between 7 and 90 days)."
+        },
+        "defaultVenue": {
+          "type": "string",
+          "enum": ["stadium_day", "stadium_night", "open_field"],
+          "description": "Default 3D stadium environment preset."
+        },
+        "defaultQuestionCount": {
+          "type": "integer",
+          "description": "Default number of questions per race (5 to 100)."
+        },
+        "defaultMaxPlayers": {
+          "type": "integer",
+          "description": "Default max participants per race (2 to 30)."
+        },
+        "defaultTimePerQuestion": {
+          "type": "integer",
+          "description": "Default timer in seconds per question (5 to 120)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the cloud profile was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest profile update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "email",
+        "schoolName",
+        "maxArchivedMatches",
+        "retentionDays",
+        "defaultVenue",
+        "defaultQuestionCount",
+        "defaultMaxPlayers",
+        "defaultTimePerQuestion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "QuestionPack": {
+      "title": "Compact Question Pack",
+      "description": "Bundled pack of up to 50 quiz questions stored in 1 compact Firestore document to minimize Spark read/write quota usage.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owning teacher."
+        },
+        "packIndex": {
+          "type": "integer",
+          "description": "Zero-based pack slot index (0 to 9, max 500 questions per teacher)."
+        },
+        "questionCount": {
+          "type": "integer",
+          "description": "Number of questions inside this pack (0 to 50)."
+        },
+        "approxBytes": {
+          "type": "integer",
+          "description": "Approximate compact payload size in bytes for quota monitoring."
+        },
+        "questions": {
+          "type": "array",
+          "description": "Bounded array of up to 50 compact question objects (native Firestore maps, no JSON strings)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when this pack was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest pack sync."
+        }
+      },
+      "required": [
+        "ownerId",
+        "packIndex",
+        "questionCount",
+        "approxBytes",
+        "questions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MatchArchive": {
+      "title": "Compact Match Archive",
+      "description": "Ultra-compact 1-document summary of a finished match (metadata + Top 30 standings, zero per-answer bloat) locked in terminal archived state.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owning teacher."
+        },
+        "roomCode": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9]+$",
+          "description": "Match room join code."
+        },
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the finished match."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Subject name."
+        },
+        "grade": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30,
+          "description": "Class or grade level."
+        },
+        "questionCount": {
+          "type": "integer",
+          "description": "Total questions used in the match (1 to 100)."
+        },
+        "totalLaps": {
+          "type": "integer",
+          "description": "Computed total laps in the race (1 to 20)."
+        },
+        "participantCount": {
+          "type": "integer",
+          "description": "Number of participants in this match (0 to 30)."
+        },
+        "avgScore": {
+          "type": "number",
+          "description": "Average final score (0 to 100)."
+        },
+        "championName": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 60,
+          "description": "Name of 1st-place champion."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["archived"],
+          "description": "Terminal archived state preventing post-archive tampering."
+        },
+        "approxBytes": {
+          "type": "integer",
+          "description": "Approximate compact document size in bytes."
+        },
+        "standings": {
+          "type": "array",
+          "description": "Bounded array of up to 30 compact participant result maps."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the match archive was stored (immutable)."
+        }
+      },
+      "required": [
+        "ownerId",
+        "roomCode",
+        "roomName",
+        "subject",
+        "grade",
+        "questionCount",
+        "totalLaps",
+        "participantCount",
+        "avgScore",
+        "championName",
+        "status",
+        "approxBytes",
+        "standings",
+        "createdAt"
+      ]
+    },
+    "AdminAccount": {
+      "title": "Admin Account Record",
+      "description": "Trusted admin registry document keyed by Firebase Auth UID. Only the verified bootstrap admin may create or revoke admin records.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the authorized admin."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified admin email address."
+        },
+        "grantedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the bootstrap admin who created this record."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin role was granted (immutable)."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "grantedBy",
+        "createdAt"
+      ]
+    },
+    "StadiumLedConfig": {
+      "title": "Stadium Perimeter LED Ribbon Config",
+      "description": "Single ultra-lean global configuration document for the 360-degree lower grandstand LED perimeter board supporting rotating running text and heavily compressed sponsor images (<= 320 KB total).",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch to enable or disable custom perimeter LED playback."
+        },
+        "brightness": {
+          "type": "number",
+          "description": "LED display brightness multiplier (0.6 to 1.4)."
+        },
+        "repeatCount": {
+          "type": "integer",
+          "description": "Number of full-width LED panels tiled around the 360-degree stadium perimeter (12 to 40)."
+        },
+        "approxBytes": {
+          "type": "integer",
+          "description": "Exact UTF-8 byte size of the serialized configuration (capped at 320000 bytes to protect Firebase Spark Free Tier quota)."
+        },
+        "slides": {
+          "type": "array",
+          "description": "Bounded playlist of 1 to 10 alternating running text or compressed sponsor image slides."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the verified admin who saved this configuration."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest admin update."
+        }
+      },
+      "required": [
+        "enabled",
+        "brightness",
+        "repeatCount",
+        "approxBytes",
+        "slides",
+        "updatedBy",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": {
+        "$ref": "#/entities/AdminAccount"
+      },
+      "description": "Trusted admin registry for cross-teacher Spark storage cleanup and retention management."
+    },
+    "/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/StadiumLedConfig"
+      },
+      "description": "Publicly readable, admin-only writable global stadium configuration (specifically /settings/stadiumLed for the 360-degree lower grandstand perimeter LED board)."
+    },
+    "/teachers/{teacherId}": {
+      "schema": {
+        "$ref": "#/entities/TeacherCloudProfile"
+      },
+      "description": "Owner-isolated teacher profile and Spark quota retention configuration (contains PII email; readable/deletable by verified admin)."
+    },
+    "/teachers/{teacherId}/questionPacks/{packId}": {
+      "schema": {
+        "$ref": "#/entities/QuestionPack"
+      },
+      "description": "Compact question packs (max 50 questions per doc, max 10 packs) owned by a teacher and cleanable by verified admin."
+    },
+    "/teachers/{teacherId}/matchArchives/{archiveId}": {
+      "schema": {
+        "$ref": "#/entities/MatchArchive"
+      },
+      "description": "Compact 1-doc-per-match finished summaries (auto-pruned by maxArchivedMatches & retentionDays; cleanable by verified admin)."
+    }
+  }
+}

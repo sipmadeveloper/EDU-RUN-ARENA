@@ -1,0 +1,726 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Play,
+  Square,
+  Copy,
+  Check,
+  Users,
+  Download,
+  Camera,
+  Trophy,
+  Sun,
+  Moon,
+  Trees,
+  Volume2,
+  VolumeX,
+  Mic,
+  MicOff,
+  Link2,
+} from 'lucide-react';
+import {
+  AVATAR_COLORS,
+  RACE_VENUES,
+  type PlayerState,
+  type RaceVenueId,
+  type RoomSettings,
+  type RoomStatus,
+} from '../types/game';
+import { StadiumArena3D } from './StadiumArena3D';
+import { StadiumCountdownOverlay } from './StadiumCountdownOverlay';
+import { Loading3D } from './Loading3D';
+import { soundEngine } from '../audio/soundEngine';
+import { CommentatorClient, type CommentatorCaption } from '../audio/commentatorClient';
+import {
+  MAX_MATCH_SCORE,
+  calcPointsPerQuestion,
+  calcTotalLaps,
+  formatScoreValue,
+} from '../utils/matchScaling';
+
+interface RoomMonitorDetail {
+  id: string;
+  code: string;
+  name: string;
+  subject: string;
+  grade: string;
+  status: RoomStatus;
+  settings: RoomSettings;
+  questionCount: number;
+  totalLaps?: number;
+  pointsPerQuestion?: number;
+  maxScore?: number;
+  participants: PlayerState[];
+}
+
+interface TeacherRoomMonitorProps {
+  roomId: string;
+  token: string;
+  onBack: () => void;
+  onOpenResults: (roomId: string) => void;
+}
+
+export function TeacherRoomMonitor({
+  roomId,
+  token,
+  onBack,
+  onOpenResults,
+}: TeacherRoomMonitorProps) {
+  const [room, setRoom] = useState<RoomMonitorDetail | null>(null);
+  const [players, setPlayers] = useState<PlayerState[]>([]);
+  const [countdownVal, setCountdownVal] = useState<number | null>(null);
+  const [countdownTotal, setCountdownTotal] = useState<number>(5);
+  const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [cameraPreset, setCameraPreset] = useState<'chase' | 'broadcast' | 'finish'>('broadcast');
+  const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
+  const [muted, setMuted] = useState(soundEngine.muted);
+  const [volume, setVolume] = useState(soundEngine.volume);
+  const [commentaryEnabled, setCommentaryEnabled] = useState(true);
+  const [commentatorCaption, setCommentatorCaption] = useState<CommentatorCaption | null>(null);
+  const [commentatorError, setCommentatorError] = useState<string | null>(null);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const commentatorRef = useRef<CommentatorClient | null>(null);
+  const livePlayersRef = useRef<PlayerState[]>([]);
+  const liveVersionRef = useRef(0);
+  const lastHudSyncRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/rooms/${roomId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data.room) {
+          const list: PlayerState[] = data.room.participants || [];
+          livePlayersRef.current = list;
+          liveVersionRef.current += 1;
+          lastHudSyncRef.current = performance.now();
+          setRoom(data.room);
+          setPlayers(list);
+        } else {
+          setError(data.error || 'Gagal memuat room.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError('Gagal terhubung ke server.');
+      });
+
+    let reconnectTimer: number | null = null;
+    let reconnectAttempt = 0;
+
+    const connectWs = () => {
+      if (cancelled) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (cancelled) return;
+        reconnectAttempt = 0;
+        ws.send(JSON.stringify({ type: 'teacher:subscribe', roomId }));
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'room:state') {
+            const list: PlayerState[] = msg.room.participants || [];
+            livePlayersRef.current = list;
+            liveVersionRef.current += 1;
+            lastHudSyncRef.current = performance.now();
+            setRoom(msg.room);
+            setPlayers(list);
+          } else if (msg.type === 'player:presence') {
+            const nextList = livePlayersRef.current.map((p) =>
+              p.id === msg.participantId ? { ...p, connected: Boolean(msg.connected) } : p
+            );
+            livePlayersRef.current = nextList;
+            liveVersionRef.current += 1;
+            setPlayers(nextList);
+          } else if (msg.type === 'race:countdown') {
+            const totalTicks = typeof msg.total === 'number' && msg.total > 0 ? msg.total : 5;
+            setCountdownVal(msg.value);
+            if (typeof msg.total === 'number' && msg.total > 0) {
+              setCountdownTotal(msg.total);
+            }
+            commentatorRef.current?.playCountdownVoice(msg.value);
+            if (msg.value === 0) {
+              soundEngine.playStartingPistol();
+              soundEngine.playStartWhistle('go');
+              soundEngine.setHeartbeatTension(0);
+              soundEngine.setCrowdMood('playing');
+              soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
+              window.setTimeout(() => setCountdownVal(null), 1100);
+            } else {
+              soundEngine.setCrowdMood('countdown');
+              soundEngine.playCountdownBeep(false);
+              if (msg.value === totalTicks) {
+                soundEngine.playStartWhistle('ready');
+              }
+              const tensionRamp = Math.max(0, Math.min(1, (totalTicks - msg.value + 1) / totalTicks));
+              soundEngine.setHeartbeatTension(0.32 + tensionRamp * 0.54);
+            }
+          } else if (msg.type === 'race:event') {
+            if (msg.kind === 'boost') {
+              commentatorRef.current?.pushEvent(
+                `${msg.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
+              );
+            } else if (msg.kind === 'timeout') {
+              commentatorRef.current?.pushEvent(
+                `${msg.name} kehabisan waktu soal dan larinya melambat!`
+              );
+            } else if (msg.kind === 'penalty') {
+              commentatorRef.current?.pushEvent(
+                `${msg.name} kurang tepat menjawab dan harus melambat sementara!`
+              );
+            }
+          } else if (msg.type === 'race:tick') {
+            const tickList = msg.players as Array<Partial<PlayerState> & { id: string }>;
+            const map = new Map<string, Partial<PlayerState>>(tickList.map((p) => [p.id, p]));
+            const nextList = livePlayersRef.current.map((p) => (map.has(p.id) ? { ...p, ...map.get(p.id) } : p));
+            livePlayersRef.current = nextList;
+            liveVersionRef.current += 1;
+            const nowPerf = performance.now();
+            if (nowPerf - lastHudSyncRef.current >= 240) {
+              lastHudSyncRef.current = nowPerf;
+              setPlayers(nextList);
+            }
+          } else if (msg.type === 'player:finished') {
+            soundEngine.triggerCrowdSwell(0.85, 2.2);
+            commentatorRef.current?.pushEvent(
+              `${msg.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${msg.finishRank}!`
+            );
+          } else if (msg.type === 'room:finished') {
+            const list: PlayerState[] = msg.room.participants || [];
+            livePlayersRef.current = list;
+            liveVersionRef.current += 1;
+            lastHudSyncRef.current = performance.now();
+            setRoom(msg.room);
+            setPlayers(list);
+            setCameraPreset('finish');
+            soundEngine.setHeartbeatTension(0);
+            soundEngine.setRaceIntensity(0, { allowAutoSwell: false });
+            soundEngine.playFinishWhistle();
+            soundEngine.setCrowdMood('victory');
+            soundEngine.startVictoryMusic();
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      ws.onclose = () => {
+        if (cancelled) return;
+        reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
+        const delay = Math.min(3500, 700 * Math.pow(1.45, reconnectAttempt - 1)) + Math.random() * 400;
+        reconnectTimer = window.setTimeout(connectWs, delay);
+      };
+    };
+
+    connectWs();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
+  }, [roomId, token]);
+
+  async function handleStartMatch() {
+    soundEngine.unlock();
+    setActionBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/start`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error || 'Gagal memulai pertandingan.');
+    } catch {
+      setError('Gagal menghubungi server.');
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleFinishMatch() {
+    setActionBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/close`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error || 'Gagal mengakhiri pertandingan.');
+    } catch {
+      setError('Gagal menghubungi server.');
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  function handleCopyCode() {
+    if (!room) return;
+    navigator.clipboard.writeText(room.code).catch(() => {});
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  function handleCopyDirectLink() {
+    if (!room) return;
+    const directUrl = `${window.location.origin}/?join=${encodeURIComponent(room.code)}`;
+    navigator.clipboard.writeText(directUrl).catch(() => {});
+    setCopiedLink(true);
+    window.setTimeout(() => setCopiedLink(false), 2000);
+  }
+
+  function toggleMute() {
+    soundEngine.unlock();
+    soundEngine.muted = !soundEngine.muted;
+    setMuted(soundEngine.muted);
+  }
+
+  function handleVolumeChange(nextVol: number) {
+    soundEngine.unlock();
+    soundEngine.volume = nextVol;
+    setVolume(soundEngine.volume);
+    if (nextVol > 0 && soundEngine.muted) {
+      soundEngine.muted = false;
+      setMuted(false);
+    }
+  }
+
+  function toggleCommentary() {
+    soundEngine.unlock();
+    const next = !commentaryEnabled;
+    setCommentaryEnabled(next);
+    commentatorRef.current?.setEnabled(next);
+    if (!next) {
+      setCommentatorCaption(null);
+      setCommentatorError(null);
+    }
+  }
+
+  const activeVenue: RaceVenueId = venueOverride ?? room?.settings?.venue ?? 'stadium_day';
+  const roomStatus = room?.status ?? 'waiting';
+  const totalQuestions = room?.questionCount || 10;
+  const totalLaps = room?.totalLaps ?? calcTotalLaps(totalQuestions);
+
+  const audioTelemetry = useMemo(() => {
+    if (roomStatus !== 'playing' || players.length === 0) {
+      return { hasHighExcitement: false, raceIntensity: 0, heartbeatTension: 0 };
+    }
+    let leaderProgress = 0;
+    let secondProgress = 0;
+    let boostingCount = 0;
+    let activeCount = 0;
+
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      if (!p.finishedAt) activeCount++;
+      if (p.effectState === 'boost') boostingCount++;
+      if (p.progress >= leaderProgress) {
+        secondProgress = leaderProgress;
+        leaderProgress = p.progress;
+      } else if (p.progress > secondProgress) {
+        secondProgress = p.progress;
+      }
+    }
+
+    const boostRatio = Math.min(1, boostingCount / Math.min(players.length, 6));
+    const closeBattle =
+      players.length >= 2 && leaderProgress >= 0.35
+        ? Math.max(0, 1 - Math.abs(leaderProgress - secondProgress) / 0.08)
+        : 0;
+    const finalStretch = Math.max(0, (leaderProgress - 0.65) / 0.35);
+
+    const raceIntensity = Math.min(
+      1,
+      leaderProgress * 0.4 + finalStretch * 0.38 + boostRatio * 0.2 + closeBattle * 0.22
+    );
+
+    // Broadcast tension heartbeat during final stretch or close photo-finish duels
+    let heartbeatTension = 0;
+    if (activeCount > 0) {
+      if (leaderProgress >= 0.74) {
+        heartbeatTension = Math.max(heartbeatTension, 0.22 + ((leaderProgress - 0.74) / 0.26) * 0.66);
+      }
+      if (leaderProgress >= 0.58 && closeBattle >= 0.45) {
+        heartbeatTension = Math.max(heartbeatTension, closeBattle * 0.55);
+      }
+    }
+
+    const hasHighExcitement = raceIntensity >= 0.55 || leaderProgress >= 0.8 || boostingCount >= 2;
+    return {
+      hasHighExcitement,
+      raceIntensity,
+      heartbeatTension: Math.min(1, heartbeatTension),
+    };
+  }, [roomStatus, players]);
+
+  useEffect(() => {
+    soundEngine.startAmbientCrowd('waiting', activeVenue);
+    const client = new CommentatorClient({
+      onCaption: (cap) => setCommentatorCaption(cap),
+      onError: (err) => setCommentatorError(err),
+    });
+    commentatorRef.current = client;
+    client.start();
+
+    return () => {
+      client.destroy();
+      commentatorRef.current = null;
+      soundEngine.stopAllRaceAudio();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!room || !commentatorRef.current) return;
+    commentatorRef.current.updateSnapshot({
+      roomCode: room.code,
+      roomName: room.name,
+      subject: room.subject,
+      grade: room.grade,
+      status: room.status,
+      totalLaps,
+      questionCount: totalQuestions,
+      players,
+    });
+  }, [room, players, totalLaps, totalQuestions]);
+
+  useEffect(() => {
+    soundEngine.setVenue(activeVenue);
+  }, [activeVenue]);
+
+  useEffect(() => {
+    if (roomStatus === 'finished') {
+      soundEngine.setRaceIntensity(0, { heartbeatTension: 0, allowAutoSwell: false });
+      soundEngine.setCrowdMood('victory');
+      soundEngine.startVictoryMusic();
+    } else {
+      soundEngine.stopVictoryMusic();
+      if (roomStatus === 'countdown') {
+        soundEngine.setCrowdMood('countdown');
+      } else if (roomStatus === 'playing') {
+        soundEngine.setCrowdMood(audioTelemetry.hasHighExcitement ? 'excited' : 'playing');
+        soundEngine.setRaceIntensity(audioTelemetry.raceIntensity, {
+          heartbeatTension: audioTelemetry.heartbeatTension,
+        });
+      } else {
+        soundEngine.setCrowdMood('waiting');
+        soundEngine.setRaceIntensity(0, { heartbeatTension: 0, allowAutoSwell: false });
+      }
+    }
+  }, [
+    roomStatus,
+    audioTelemetry.hasHighExcitement,
+    audioTelemetry.raceIntensity,
+    audioTelemetry.heartbeatTension,
+  ]);
+
+  const sortedByScore = useMemo(
+    () => [...players].sort((a, b) => b.score - a.score || b.progress - a.progress),
+    [players]
+  );
+
+  return (
+    <div className="min-h-screen bg-[#081226] text-white flex flex-col">
+      {/* Top Bar */}
+      <div className="px-4 sm:px-6 py-3.5 bg-[#0F2957] border-b border-blue-400/25 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#081226] border border-white/15 text-sm font-semibold hover:bg-blue-900 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Kembali</span>
+          </button>
+          <div>
+            <div className="text-xs text-[#FACC15] font-semibold">
+              MONITOR ROOM GURU · {room?.subject} · Kelas {room?.grade}
+              {room
+                ? ` · ${room.questionCount} Soal · ${room.totalLaps ?? calcTotalLaps(room.questionCount)} Putaran · ${formatScoreValue(room.pointsPerQuestion ?? calcPointsPerQuestion(room.questionCount))} Poin/Soal`
+                : ''}
+            </div>
+            <h1 className="font-display font-bold text-lg">{room?.name || 'Memuat Room...'}</h1>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={toggleCommentary}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+              commentaryEnabled
+                ? 'bg-[#FF6B1A]/20 border-[#FF6B1A]/60 text-[#FACC15]'
+                : 'bg-[#081226] border-white/15 text-slate-400'
+            }`}
+            title={commentaryEnabled ? 'Matikan Suara Komentator' : 'Aktifkan Suara Komentator'}
+          >
+            {commentaryEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            <span>{commentaryEnabled ? 'Komentator ON' : 'Komentator OFF'}</span>
+          </button>
+
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-[#081226] border border-white/15">
+            <button
+              onClick={toggleMute}
+              className="text-white hover:text-[#FACC15] cursor-pointer"
+              title={muted ? 'Aktifkan Suara Stadion' : 'Matikan Suara Stadion'}
+            >
+              {muted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={muted ? 0 : volume}
+              onChange={(e) => handleVolumeChange(Number(e.target.value))}
+              aria-label="Volume Audio Stadion"
+              className="w-16 accent-[#FF6B1A] cursor-pointer"
+            />
+          </div>
+
+          {room && (
+            <>
+              <button
+                onClick={handleCopyCode}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#081226] border border-[#FACC15]/50 font-mono font-bold text-sm text-[#FACC15] cursor-pointer"
+                title="Salin Kode Room"
+              >
+                <span>KODE: {room.code}</span>
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={handleCopyDirectLink}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-400/40 font-semibold text-xs text-cyan-200 cursor-pointer"
+                title="Salin link langsung agar peserta otomatis masuk ke room ini"
+              >
+                {copiedLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Link2 className="w-4 h-4" />}
+                <span>{copiedLink ? 'Link Tersalin!' : 'Link Peserta'}</span>
+              </button>
+            </>
+          )}
+
+          {room?.status === 'waiting' && (
+            <button
+              onClick={handleStartMatch}
+              disabled={actionBusy || players.length === 0}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF6B1A] hover:bg-[#e85d10] disabled:opacity-50 font-display font-bold text-sm text-white cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span>Mulai Pertandingan</span>
+            </button>
+          )}
+
+          {(room?.status === 'playing' || room?.status === 'countdown') && (
+            <button
+              onClick={handleFinishMatch}
+              disabled={actionBusy}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold text-sm text-white cursor-pointer"
+            >
+              <Square className="w-4 h-4 fill-current" />
+              <span>Akhiri Pertandingan</span>
+            </button>
+          )}
+
+          {room?.status === 'finished' && (
+            <>
+              <button
+                onClick={() => onOpenResults(room.id)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1D4ED8] hover:bg-blue-600 font-semibold text-sm text-white cursor-pointer"
+              >
+                <Trophy className="w-4 h-4" />
+                <span>Lihat Hasil & Podium</span>
+              </button>
+              <a
+                href={`/api/rooms/${room.id}/export-excel?token=${encodeURIComponent(token)}`}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm text-white"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Excel</span>
+              </a>
+            </>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="mx-6 mt-3 p-3 rounded-xl bg-red-950/70 border border-red-400/40 text-sm text-red-200">
+          {error}
+        </div>
+      )}
+
+      {/* Main Split: 3D Broadcast Stadium + Live 30-Player Roster */}
+      <div className="flex-1 grid lg:grid-cols-12 min-h-0">
+        <div className="lg:col-span-8 relative min-h-[380px]">
+          {!room && !error && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#081226]">
+              <Loading3D
+                variant="inline"
+                size="lg"
+                title="Menyiapkan Stadion Monitor 3D..."
+                subtitle="Memuat konfigurasi room dan lintasan"
+                className="flex-col text-center"
+              />
+            </div>
+          )}
+          {room && (
+            <StadiumArena3D
+              questionCount={room.questionCount}
+              maxPlayers={room.settings.maxPlayers}
+              players={players}
+              livePlayersRef={livePlayersRef}
+              liveVersionRef={liveVersionRef}
+              roomStatus={room.status}
+              roomName={room.name}
+              cameraPreset={cameraPreset}
+              venue={venueOverride ?? room.settings.venue ?? 'stadium_day'}
+            />
+          )}
+
+          {countdownVal !== null && (
+            <StadiumCountdownOverlay value={countdownVal} total={countdownTotal} />
+          )}
+
+          {commentaryEnabled && countdownVal === null && (commentatorCaption || commentatorError) && (
+            <div className="absolute top-4 left-4 right-4 z-20 flex justify-center pointer-events-none">
+              <div className="max-w-2xl px-4 py-2 rounded-xl bg-[#081226]/92 border border-[#FACC15]/40 text-xs sm:text-sm shadow-xl">
+                {commentatorError ? (
+                  <span className="text-amber-300 font-medium">{commentatorError}</span>
+                ) : commentatorCaption ? (
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="font-mono font-bold uppercase text-[#FF6B1A] shrink-0">
+                      {commentatorCaption.speaker}:
+                    </span>
+                    <span className="text-slate-100 leading-snug">{commentatorCaption.text}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+          <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+            <div className="flex flex-wrap items-center gap-2 pointer-events-auto">
+              {(['broadcast', 'chase', 'finish'] as const).map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => setCameraPreset(preset)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                    cameraPreset === preset
+                      ? 'bg-[#FF6B1A] text-white'
+                      : 'bg-[#081226]/90 border border-white/20 text-slate-200'
+                  }`}
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span className="capitalize">
+                    {preset === 'broadcast' ? 'Kamera Stadion' : preset === 'chase' ? 'Ikuti Pemimpin' : 'Garis Finish'}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {room && (
+              <div className="inline-flex items-center p-1 rounded-xl bg-[#081226]/90 border border-white/20 pointer-events-auto">
+                {RACE_VENUES.map((v) => {
+                  const activeVenue = venueOverride ?? room.settings.venue ?? 'stadium_day';
+                  const active = activeVenue === v.id;
+                  const Icon =
+                    v.id === 'stadium_day' ? Sun : v.id === 'stadium_night' ? Moon : Trees;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setVenueOverride(v.id)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                        active ? 'bg-[#1D4ED8] text-white' : 'text-slate-300 hover:bg-white/10'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      <span>{v.shortLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="lg:col-span-4 bg-[#0F2957] border-l border-blue-400/25 p-4 flex flex-col max-h-[600px] lg:max-h-none overflow-hidden">
+          <div className="flex items-center justify-between pb-3 border-b border-white/10">
+            <div className="flex items-center gap-2 font-display font-bold text-base">
+              <Users className="w-4 h-4 text-[#FF6B1A]" />
+              <span>
+                Peserta Bergabung ({players.length}/{room?.settings.maxPlayers || 30})
+              </span>
+            </div>
+            <span className="text-xs font-semibold text-cyan-300">
+              {room?.status === 'waiting'
+                ? 'Menunggu'
+                : room?.status === 'playing'
+                ? 'Berlangsung'
+                : room?.status === 'countdown'
+                ? 'Hitung Mundur'
+                : 'Selesai'}
+            </span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto divide-y divide-white/10 mt-2">
+            {sortedByScore.length === 0 ? (
+              <div className="py-10 px-4 flex flex-col items-center text-center gap-3">
+                <Loading3D
+                  variant="inline"
+                  size="md"
+                  title="Menunggu Peserta Bergabung..."
+                  subtitle={`Bagikan kode ${room?.code || '...'} kepada siswa untuk masuk ke garis start.`}
+                  className="flex-col text-center"
+                />
+              </div>
+            ) : (
+              sortedByScore.map((p, idx) => {
+                const cHex = AVATAR_COLORS.find((c) => c.id === p.avatar.color)?.hex || '#2563EB';
+                return (
+                  <div key={p.id} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="font-mono font-bold text-slate-400 w-5">#{idx + 1}</span>
+                      <span
+                        className="w-3.5 h-3.5 rounded-full shrink-0 border border-white/30"
+                        style={{ backgroundColor: cHex }}
+                      />
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white truncate">
+                          {p.name}{' '}
+                          {!p.connected && <span className="text-[10px] text-rose-300">(Offline)</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-300">
+                          {p.className} · Soal {p.answeredCount}/{room?.questionCount}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-bold text-[#FACC15] tabular-nums">
+                        {formatScoreValue(p.score)} / {room?.maxScore ?? MAX_MATCH_SCORE}
+                      </div>
+                      <div className="font-mono text-[11px] text-cyan-300 tabular-nums">
+                        {Math.round(p.progress * 100)}%
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
