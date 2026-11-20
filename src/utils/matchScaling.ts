@@ -1,10 +1,31 @@
 export const MAX_MATCH_SCORE = 100;
 export const QUESTIONS_PER_LAP = 5;
-export const TRACK_UNITS_PER_QUESTION = 360;
+export const TRACK_UNITS_PER_QUESTION = 72;
 
 export function calcTotalLaps(questionCount: number): number {
   const safeCount = Math.max(1, Math.round(questionCount || 1));
   return Math.max(1, Math.ceil(safeCount / QUESTIONS_PER_LAP));
+}
+
+export function calcGatesPerLap(questionCount: number): number {
+  const safeCount = Math.max(1, Math.round(questionCount || 1));
+  return Math.min(QUESTIONS_PER_LAP, safeCount);
+}
+
+/**
+ * Exact normalized race progress (0..1) where the runner crosses the painted
+ * 3D "GERBANG SOAL" ground line for the given 0-based question index.
+ * Matches createStadium.ts gateFractions = (gateInLap + 1) / (gatesOnLap + 1).
+ */
+export function calcQuestionGateProgress(questionIndex: number, questionCount: number): number {
+  const safeCount = Math.max(1, Math.round(questionCount || 1));
+  const safeIdx = Math.max(0, Math.min(safeCount - 1, Math.floor(questionIndex || 0)));
+  const totalLaps = calcTotalLaps(safeCount);
+  const gatesOnLap = calcGatesPerLap(safeCount);
+  const lapIndex = Math.floor(safeIdx / gatesOnLap);
+  const gateInLap = safeIdx % gatesOnLap;
+  const lapFrac = (gateInLap + 1) / (gatesOnLap + 1);
+  return Math.min(0.985, (lapIndex + lapFrac) / totalLaps);
 }
 
 export function calcPointsPerQuestion(questionCount: number): number {

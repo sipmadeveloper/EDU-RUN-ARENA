@@ -44,7 +44,9 @@ import { Loading3D } from './Loading3D';
 import { RACE_MUSIC_TRACKS, soundEngine, type RaceMusicTrackId } from '../audio/soundEngine';
 import {
   MAX_MATCH_SCORE,
+  calcGatesPerLap,
   calcPointsPerQuestion,
+  calcQuestionGateProgress,
   calcTotalLaps,
   formatScoreValue,
 } from '../utils/matchScaling';
@@ -69,7 +71,7 @@ interface ActiveQuestionPayload {
   questionStartedAt: number;
 }
 
-const QUESTION_HIDE_GAP_MS = 2200;
+const QUESTION_HIDE_GAP_MS = 1400;
 
 interface StudentRaceViewProps {
   session: JoinedSession;
@@ -297,7 +299,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         (room.status === 'countdown' && room.startedAtMs > 0 && Date.now() >= room.startedAtMs))
   );
 
-  // Automatic local question delivery & 2.2s cooldown between questions
+  // Gate-triggered question delivery: each question only appears once the runner crosses its 3D question gate line
   useEffect(() => {
     const id = window.setInterval(() => {
       const r = rawRoomRef.current;
@@ -320,6 +322,19 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         now >= nextQuestionAllowedAtRef.current &&
         !submittedQuestionIndicesRef.current.has(localRaw.currentQuestionIndex)
       ) {
+        const localProj =
+          livePlayersRef.current.find((p) => p.id === session.participantId) ??
+          projectParticipantPhysics(localRaw, r, now);
+        const requiredGateProgress = calcQuestionGateProgress(
+          localRaw.currentQuestionIndex,
+          r.questionCount
+        );
+
+        // Wait until the runner physically crosses the painted "GERBANG SOAL" line on the 3D track
+        if (localProj.progress < requiredGateProgress) {
+          return;
+        }
+
         const q = r.questions[localRaw.currentQuestionIndex];
         if (q) {
           setQuestionsCompleted(false);
@@ -339,7 +354,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           });
         }
       }
-    }, 250);
+    }, 120);
     return () => window.clearInterval(id);
   }, [currentQuestion, session.participantId]);
 
@@ -1080,6 +1095,48 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   Semua {totalQuestions} Soal Selesai! Pelari Anda Sedang Sprint Menuju Garis Finish...
                 </div>
               </div>
+            ) : room && localPlayer && localPlayer.currentQuestionIndex < totalQuestions ? (
+              (() => {
+                const nextIdx = localPlayer.currentQuestionIndex;
+                const gatesOnLap = calcGatesPerLap(totalQuestions);
+                const gateNum = (nextIdx % gatesOnLap) + 1;
+                const gateLap = Math.floor(nextIdx / gatesOnLap) + 1;
+                const reqProg = calcQuestionGateProgress(nextIdx, totalQuestions);
+                const prevProg =
+                  nextIdx > 0 ? calcQuestionGateProgress(nextIdx - 1, totalQuestions) : 0;
+                const ratio = Math.max(
+                  0,
+                  Math.min(1, (localPlayer.progress - prevProg) / Math.max(0.001, reqProg - prevProg))
+                );
+                const metersLeft = Math.max(
+                  0,
+                  Math.ceil((reqProg - localPlayer.progress) * room.trackLength)
+                );
+                return (
+                  <div className="px-4 py-2.5 rounded-2xl bg-[#081226]/92 border border-blue-400/35 shadow-xl">
+                    <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+                      <div className="flex items-center gap-2 font-display font-bold text-white">
+                        <Flag className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
+                        <span>
+                          Menuju Gerbang Soal {gateNum} · Soal {nextIdx + 1}/{totalQuestions}
+                        </span>
+                        <span className="hidden sm:inline text-[11px] font-normal text-blue-200">
+                          (Putaran {gateLap}/{totalLaps})
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-[#FACC15] tabular-nums shrink-0">
+                        {metersLeft > 0 ? `${metersLeft} m lagi` : 'Melewati Gerbang!'}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-[#FF6B1A] transition-all duration-200"
+                        style={{ width: `${Math.round(ratio * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()
             ) : null}
           </div>
         </div>

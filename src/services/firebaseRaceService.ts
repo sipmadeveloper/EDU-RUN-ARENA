@@ -31,6 +31,7 @@ import type {
 import {
   MAX_MATCH_SCORE,
   calcPointsPerQuestion,
+  calcQuestionGateProgress,
   calcScoreFromCorrect,
   calcTotalLaps,
   calcTrackLength,
@@ -840,10 +841,17 @@ export function projectParticipantPhysics(
   const trackLength = Math.max(10, room.trackLength);
   const totalQuestions = Math.max(1, room.questionCount);
   const segmentLen = trackLength / totalQuestions;
+  const nextGateDist =
+    p.answeredCount < totalQuestions
+      ? Math.min(trackLength - 0.5, calcQuestionGateProgress(p.answeredCount, totalQuestions) * trackLength + 4)
+      : trackLength;
   const maxAllowedDist =
     p.answeredCount >= totalQuestions
       ? trackLength
-      : Math.min(trackLength - 0.5, (p.answeredCount + 0.96) * segmentLen);
+      : Math.max(
+          nextGateDist,
+          Math.min(trackLength - 0.5, (p.answeredCount + 0.96) * segmentLen)
+        );
 
   const raceStartMs = room.startedAtMs > 0 ? room.startedAtMs : p.startedAt || nowMs;
   const anchorMs = Math.max(raceStartMs, p.lastSyncMs || raceStartMs);
@@ -960,7 +968,7 @@ export async function submitParticipantAnswer(params: {
     nextEffectState = 'boost';
     nextEffectExpiresAt = now + room.settings.boostDuration * 1000;
     nextSpeed = Number((room.settings.baseSpeed * 2.25).toFixed(2));
-    nextDistance = Math.min(room.trackLength, projected.distance + 12);
+    nextDistance = Math.min(room.trackLength, projected.distance + 5);
   } else {
     nextEffectState = 'penalty';
     nextEffectExpiresAt = now + room.settings.penaltyDuration * 1000;

@@ -118,6 +118,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   const venueRef = useRef<RaceVenueId>(venue);
   const dataVersionRef = useRef(0);
 
+  const prevStaticSigRef = useRef('');
   playersRef.current = players;
   externalLivePlayersRef.current = livePlayersRef;
   externalLiveVersionRef.current = liveVersionRef;
@@ -128,7 +129,11 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   roomNameRef.current = roomName;
   maxPlayersRef.current = maxPlayers;
   venueRef.current = venue;
-  dataVersionRef.current += 1;
+  const staticSig = `${roomStatus}:${maxPlayers}:${localPlayerId || ''}:${roomName}:${livePlayersRef ? 'ext' : players.length}`;
+  if (!livePlayersRef || prevStaticSigRef.current !== staticSig) {
+    prevStaticSigRef.current = staticSig;
+    dataVersionRef.current += 1;
+  }
 
   const measurePipSlots = useCallback(() => {
     const host = mountRef.current;
@@ -160,7 +165,11 @@ export const StadiumArena3D = memo(function StadiumArena3D({
 
   useEffect(() => {
     const id = requestAnimationFrame(measurePipSlots);
-    return () => cancelAnimationFrame(id);
+    const settleId = window.setTimeout(measurePipSlots, 140);
+    return () => {
+      cancelAnimationFrame(id);
+      window.clearTimeout(settleId);
+    };
   }, [cameraViewMode, pipPlacement, measurePipSlots]);
 
   useEffect(() => {
@@ -180,7 +189,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     camera.position.set(-30, 16, 175);
     camera.lookAt(camLookCurrent);
 
-    // 4 persistent sub-cameras for live 4-angle multi-viewport preview (zero per-frame allocations)
+    // 4 persistent sub-cameras + lightweight offscreen render targets for smooth 4-angle live preview
     const previewCameras = CAMERA_PRESET_LIST.map(() => {
       const subCam = new THREE.PerspectiveCamera(54, 16 / 10, 0.2, 2400);
       subCam.position.set(-30, 16, 175);
@@ -189,7 +198,47 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     const previewLookCurrents = CAMERA_PRESET_LIST.map(() => new THREE.Vector3(14, 2, 142));
     const previewInitialized = CAMERA_PRESET_LIST.map(() => false);
 
+    const PIP_RT_W = 240;
+    const PIP_RT_H = 150;
+    const previewRenderTargets = CAMERA_PRESET_LIST.map(
+      () =>
+        new THREE.WebGLRenderTarget(PIP_RT_W, PIP_RT_H, {
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          depthBuffer: true,
+          stencilBuffer: false,
+        })
+    );
+    const previewDirty = CAMERA_PRESET_LIST.map(() => true);
+    let pipRoundRobinIdx = 0;
+    let quadPairParity = 0;
+    let lastViewMode: CameraViewMode = viewModeRef.current;
+
+    const blitScene = new THREE.Scene();
+    const blitCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const blitGeo = new THREE.PlaneGeometry(2, 2);
+    const blitMat = new THREE.MeshBasicMaterial({
+      map: previewRenderTargets[0].texture,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: true,
+    });
+    const blitQuad = new THREE.Mesh(blitGeo, blitMat);
+    blitQuad.frustumCulled = false;
+    blitScene.add(blitQuad);
+
+    const ensureRenderTargetSize = (rt: THREE.WebGLRenderTarget, targetW: number, targetH: number) => {
+      const wClamped = Math.max(64, Math.round(targetW));
+      const hClamped = Math.max(40, Math.round(targetH));
+      if (Math.abs(rt.width - wClamped) > 16 || Math.abs(rt.height - hClamped) > 16) {
+        rt.setSize(wClamped, hClamped);
+      }
+    };
+
     const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
+    if (!isSoftwareGl && renderer.getPixelRatio() > 1.5) {
+      renderer.setPixelRatio(1.5);
+    }
     const disposeEnv = applyStudioEnvironment(scene, renderer);
 
     const lightingRig = createSceneLightingRig(scene, isSoftwareGl, initialVenue);
@@ -376,13 +425,13 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       const dt = Math.min(rawDt, 0.04);
       const elapsed = clock.elapsedTime;
 
-      // Adaptive performance guard: if sustained frame time > 28ms on hardware WebGL, reduce resolution cleanly
+      // Adaptive performance guard: if sustained frame time > 25ms on hardware WebGL, reduce resolution cleanly
       if (!isSoftwareGl && rawDt > 0 && rawDt < 0.25) {
         slowFrameAccum += rawDt;
         slowFrameSamples += 1;
-        if (slowFrameSamples >= 30) {
+        if (slowFrameSamples >= 18) {
           const avgDt = slowFrameAccum / slowFrameSamples;
-          if (avgDt > 0.028) {
+          if (avgDt > 0.025) {
             if (currentDpr > 0.9) {
               currentDpr = Math.max(0.85, Number((currentDpr - 0.25).toFixed(2)));
               renderer.setPixelRatio(currentDpr);
@@ -957,8 +1006,11 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       const h = viewportH || container.clientHeight || window.innerHeight;
       frameCounter += 1;
 
-      if (viewMode === 'pip' && frameCounter % 15 === 0) {
-        measurePipSlots();
+      if (viewMode !== lastViewMode) {
+        lastViewMode = viewMode;
+        for (let i = 0; i < previewDirty.length; i++) {
+          previewDirty[i] = true;
+        }
       }
 
       const updateSubCamera = (idx: number, preset: CameraPresetId, aspect: number) => {
@@ -1002,23 +1054,59 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           [0, 0, halfW, halfH],
           [halfW, 0, rightW, halfH],
         ];
+
+        // Update 2 quadrants per frame into cached render targets (cuts GPU scene passes by 50%)
+        const qTargetW = Math.min(480, Math.max(200, Math.floor(halfW * 0.85)));
+        const qTargetH = Math.min(300, Math.max(130, Math.floor(halfH * 0.85)));
         const prevShadowAuto = renderer.shadowMap.autoUpdate;
+        const prevShadowEnabled = renderer.shadowMap.enabled;
+        quadPairParity = (quadPairParity + 1) % 2;
+        const indicesToUpdate: number[] = [];
+        for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
+          if (previewDirty[i] && indicesToUpdate.length < 2) {
+            indicesToUpdate.push(i);
+          }
+        }
+        if (indicesToUpdate.length === 0) {
+          indicesToUpdate.push(quadPairParity * 2, quadPairParity * 2 + 1);
+        }
+
+        renderer.setScissorTest(false);
+        for (let k = 0; k < indicesToUpdate.length; k++) {
+          const i = indicesToUpdate[k];
+          const [, , vw, vh] = quadCells[i];
+          if (vw < 4 || vh < 4) continue;
+          const rt = previewRenderTargets[i];
+          ensureRenderTargetSize(rt, qTargetW, qTargetH);
+          updateSubCamera(i, CAMERA_PRESET_LIST[i].id, vw / vh);
+          renderer.shadowMap.enabled = prevShadowEnabled && !isSoftwareGl && currentDpr >= 1;
+          renderer.shadowMap.autoUpdate = k === 0 ? prevShadowAuto : false;
+          renderer.setRenderTarget(rt);
+          renderer.setViewport(0, 0, rt.width, rt.height);
+          renderer.render(scene, previewCameras[i]);
+          previewDirty[i] = false;
+        }
+        renderer.setRenderTarget(null);
+        renderer.shadowMap.enabled = prevShadowEnabled;
+        renderer.shadowMap.autoUpdate = prevShadowAuto;
+
+        // Blit all 4 cached quadrant textures in 4 lightweight fullscreen-quad draws
+        const prevAutoClear = renderer.autoClear;
+        renderer.autoClear = false;
         renderer.setScissorTest(true);
         for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
           const [vx, vy, vw, vh] = quadCells[i];
           if (vw < 4 || vh < 4) continue;
-          updateSubCamera(i, CAMERA_PRESET_LIST[i].id, vw / vh);
+          blitMat.map = previewRenderTargets[i].texture;
           renderer.setViewport(vx, vy, vw, vh);
           renderer.setScissor(vx, vy, vw, vh);
-          // Compute shadow map once on pass 0 and reuse across passes 1..3
-          renderer.shadowMap.autoUpdate = i === 0 ? prevShadowAuto : false;
-          renderer.render(scene, previewCameras[i]);
+          renderer.render(blitScene, blitCamera);
         }
-        renderer.shadowMap.autoUpdate = prevShadowAuto;
         renderer.setScissorTest(false);
         renderer.setViewport(0, 0, w, h);
+        renderer.autoClear = prevAutoClear;
       } else {
-        // Main camera pass (single or pip base)
+        // Main camera pass (single or pip base) — always full smoothness
         const mainCfg = computePresetCamera(presetRef.current, true, _camDesired, _camTarget);
         if (Math.abs(camera.fov - mainCfg.fov) > 0.08) {
           camera.fov = THREE.MathUtils.damp(camera.fov, mainCfg.fov, 6, dt);
@@ -1029,31 +1117,70 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         camLookCurrent.lerp(_camTarget, camAlpha);
         camera.lookAt(camLookCurrent);
 
+        renderer.setRenderTarget(null);
         renderer.setScissorTest(false);
         renderer.setViewport(0, 0, w, h);
         renderer.render(scene, camera);
 
-        // Optional 4 live mini preview viewports rendered directly inside the same WebGL canvas
+        // Cached round-robin 4-angle PiP preview (at most 1 lightweight offscreen thumbnail update every 2 frames)
         if (viewMode === 'pip') {
           const rects = pipRectsRef.current;
-          const prevShadowAuto = renderer.shadowMap.autoUpdate;
+
+          let updateIdx = -1;
+          for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
+            const r = rects[i];
+            if (previewDirty[i] && r && r.visible && r.width >= 12 && r.height >= 12) {
+              updateIdx = i;
+              break;
+            }
+          }
+          const cadence = isSoftwareGl || currentDpr < 1 ? 3 : 2;
+          if (updateIdx === -1 && frameCounter % cadence === 0) {
+            for (let step = 0; step < CAMERA_PRESET_LIST.length; step++) {
+              const cand = (pipRoundRobinIdx + step) % CAMERA_PRESET_LIST.length;
+              const r = rects[cand];
+              if (r && r.visible && r.width >= 12 && r.height >= 12) {
+                updateIdx = cand;
+                pipRoundRobinIdx = (cand + 1) % CAMERA_PRESET_LIST.length;
+                break;
+              }
+            }
+          }
+
+          if (updateIdx >= 0) {
+            const r = rects[updateIdx];
+            const rt = previewRenderTargets[updateIdx];
+            ensureRenderTargetSize(rt, PIP_RT_W, PIP_RT_H);
+            updateSubCamera(updateIdx, CAMERA_PRESET_LIST[updateIdx].id, r.width / r.height);
+            const prevShadowEnabled = renderer.shadowMap.enabled;
+            const prevShadowAuto = renderer.shadowMap.autoUpdate;
+            renderer.shadowMap.enabled = false;
+            renderer.shadowMap.autoUpdate = false;
+            renderer.setScissorTest(false);
+            renderer.setRenderTarget(rt);
+            renderer.setViewport(0, 0, rt.width, rt.height);
+            renderer.render(scene, previewCameras[updateIdx]);
+            renderer.setRenderTarget(null);
+            renderer.shadowMap.enabled = prevShadowEnabled;
+            renderer.shadowMap.autoUpdate = prevShadowAuto;
+            previewDirty[updateIdx] = false;
+          }
+
           const prevAutoClear = renderer.autoClear;
-          renderer.shadowMap.autoUpdate = false;
           renderer.autoClear = false;
           renderer.setScissorTest(true);
           for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
             const r = rects[i];
             if (!r || !r.visible || r.width < 12 || r.height < 12) continue;
-            updateSubCamera(i, CAMERA_PRESET_LIST[i].id, r.width / r.height);
+            if (previewDirty[i]) continue;
+            blitMat.map = previewRenderTargets[i].texture;
             renderer.setViewport(r.left, r.bottom, r.width, r.height);
             renderer.setScissor(r.left, r.bottom, r.width, r.height);
-            renderer.clearDepth();
-            renderer.render(scene, previewCameras[i]);
+            renderer.render(blitScene, blitCamera);
           }
           renderer.setScissorTest(false);
           renderer.setViewport(0, 0, w, h);
           renderer.autoClear = prevAutoClear;
-          renderer.shadowMap.autoUpdate = prevShadowAuto;
         }
       }
 
@@ -1077,6 +1204,11 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         entry.rig.dispose();
       }
       runnerMap.clear();
+      for (const rt of previewRenderTargets) {
+        rt.dispose();
+      }
+      blitGeo.dispose();
+      blitMat.dispose();
       trailGeo.dispose();
       trailMat.dispose();
       stadium.dispose();

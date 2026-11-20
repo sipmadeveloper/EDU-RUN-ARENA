@@ -18,6 +18,11 @@ import {
   SkipForward,
   Link2,
   Grid2x2,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  AlertTriangle,
+  Flag,
 } from 'lucide-react';
 import {
   AVATAR_COLORS,
@@ -54,6 +59,8 @@ import {
   type LiveFirebaseRoom,
 } from '../services/firebaseRaceService';
 
+const EMPTY_ARENA_PLAYERS: PlayerState[] = [];
+
 interface TeacherRoomMonitorProps {
   roomId: string;
   token: string;
@@ -77,6 +84,7 @@ export function TeacherRoomMonitor({
   const [error, setError] = useState('');
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('broadcast');
   const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('pip');
+  const [showLiveRanking, setShowLiveRanking] = useState(true);
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [muted, setMuted] = useState(soundEngine.muted);
   const [volume, setVolume] = useState(soundEngine.volume);
@@ -214,7 +222,7 @@ export function TeacherRoomMonitor({
         livePlayersRef.current = projected;
         liveVersionRef.current += 1;
         const nowPerf = performance.now();
-        if (nowPerf - lastHudSyncRef.current >= 240) {
+        if (nowPerf - lastHudSyncRef.current >= 400) {
           lastHudSyncRef.current = nowPerf;
           setPlayers(projected);
         }
@@ -427,6 +435,30 @@ export function TeacherRoomMonitor({
     [players]
   );
 
+  const sortedByRaceRank = useMemo(() => {
+    return [...players].sort((a, b) => {
+      if (roomStatus === 'finished') {
+        const ra = a.scoreRank ?? Number.MAX_SAFE_INTEGER;
+        const rb = b.scoreRank ?? Number.MAX_SAFE_INTEGER;
+        if (ra !== rb) return ra - rb;
+        if (b.score !== a.score) return b.score - a.score;
+        return (a.finishRank ?? 999) - (b.finishRank ?? 999);
+      }
+      if (roomStatus === 'waiting' || roomStatus === 'countdown') {
+        return a.lane - b.lane;
+      }
+      const fa = a.finishRank ?? Number.MAX_SAFE_INTEGER;
+      const fb = b.finishRank ?? Number.MAX_SAFE_INTEGER;
+      if (fa !== fb) return fa - fb;
+      if (Math.abs(b.progress - a.progress) > 0.0005) return b.progress - a.progress;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.lane - b.lane;
+    });
+  }, [players, roomStatus]);
+
+  const leaderProgress = sortedByRaceRank[0]?.progress ?? 0;
+  const currentLeaderLap = Math.min(totalLaps, Math.floor(leaderProgress * totalLaps) + 1);
+
   return (
     <div className="min-h-screen bg-[#081226] text-white flex flex-col">
       {/* Top Bar */}
@@ -583,7 +615,7 @@ export function TeacherRoomMonitor({
             <StadiumArena3D
               questionCount={room.questionCount}
               maxPlayers={room.settings.maxPlayers}
-              players={players}
+              players={EMPTY_ARENA_PLAYERS}
               livePlayersRef={livePlayersRef}
               liveVersionRef={liveVersionRef}
               roomStatus={room.status}
@@ -596,6 +628,129 @@ export function TeacherRoomMonitor({
               venue={venueOverride ?? room.settings.venue ?? 'stadium_day'}
             />
           )}
+
+          {/* Live Race Ranking Board Overlay inside Teacher Preview */}
+          {room &&
+            (room.status === 'playing' || room.status === 'countdown' || room.status === 'finished') &&
+            sortedByRaceRank.length > 0 && (
+              <div
+                className={`absolute left-3 z-30 pointer-events-auto max-w-[calc(100%-24px)] ${
+                  cameraViewMode === 'quad' ? 'top-10' : 'top-3'
+                }`}
+              >
+                <div className="rounded-xl bg-[#081226]/92 border border-blue-400/40 shadow-2xl overflow-hidden w-[248px] sm:w-[278px]">
+                  <button
+                    type="button"
+                    onClick={() => setShowLiveRanking((v) => !v)}
+                    className="w-full px-3 py-2 bg-[#0F2957]/95 border-b border-blue-400/25 flex items-center justify-between gap-2 text-left cursor-pointer hover:bg-blue-900/90"
+                    title={showLiveRanking ? 'Perkecil Papan Peringkat' : 'Tampilkan Papan Peringkat'}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Trophy className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
+                      <div className="min-w-0">
+                        <div className="font-display font-extrabold text-[11px] tracking-wide text-white leading-tight truncate">
+                          {room.status === 'finished' ? 'PERINGKAT AKHIR' : 'PERINGKAT URUTAN LIVE'}
+                        </div>
+                        <div className="text-[10px] font-mono text-cyan-300 leading-tight">
+                          {room.status === 'playing'
+                            ? `Putaran ${currentLeaderLap}/${totalLaps} · ${sortedByRaceRank.length} Pelari`
+                            : room.status === 'countdown'
+                            ? `Garis Start · ${sortedByRaceRank.length} Pelari`
+                            : `Selesai · ${sortedByRaceRank.length} Pelari`}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="p-1 rounded bg-[#081226]/80 text-slate-200 shrink-0">
+                      {showLiveRanking ? (
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      )}
+                    </span>
+                  </button>
+
+                  {showLiveRanking && (
+                    <div className="max-h-[215px] sm:max-h-[270px] overflow-y-auto divide-y divide-white/10">
+                      {sortedByRaceRank.map((p, idx) => {
+                        const rankNum = idx + 1;
+                        const cHex =
+                          AVATAR_COLORS.find((c) => c.id === p.avatar.color)?.hex || '#2563EB';
+                        const pct = Math.round(p.progress * 100);
+                        const rankBadgeClass =
+                          rankNum === 1
+                            ? 'bg-[#FACC15] text-[#081226]'
+                            : rankNum === 2
+                            ? 'bg-slate-200 text-[#081226]'
+                            : rankNum === 3
+                            ? 'bg-orange-400 text-[#081226]'
+                            : 'bg-slate-800 text-slate-200';
+                        return (
+                          <div key={p.id} className="px-2.5 py-1.5 hover:bg-white/5">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className={`w-5 h-5 rounded-md flex items-center justify-center font-mono font-extrabold text-[10px] shrink-0 ${rankBadgeClass}`}
+                                >
+                                  {rankNum}
+                                </span>
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/40"
+                                  style={{ backgroundColor: cHex }}
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-white truncate leading-tight">
+                                    {p.name}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-slate-300 leading-tight">
+                                    <span className="truncate">{p.className}</span>
+                                    {p.finishedAt ? (
+                                      <span className="inline-flex items-center gap-0.5 text-[#FACC15] font-bold">
+                                        <Flag className="w-2.5 h-2.5" /> FINISH
+                                      </span>
+                                    ) : p.effectState === 'boost' ? (
+                                      <span className="inline-flex items-center gap-0.5 text-cyan-300 font-bold">
+                                        <Zap className="w-2.5 h-2.5" /> BOOST
+                                      </span>
+                                    ) : p.effectState === 'penalty' ? (
+                                      <span className="inline-flex items-center gap-0.5 text-rose-300 font-bold">
+                                        <AlertTriangle className="w-2.5 h-2.5" /> LAMBAT
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="text-right shrink-0">
+                                <div className="font-mono font-bold text-[#FACC15] tabular-nums leading-tight">
+                                  {formatScoreValue(p.score)}p
+                                </div>
+                                <div className="font-mono text-[10px] text-cyan-300 tabular-nums leading-tight">
+                                  {pct}%
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-1 w-full h-1 rounded-full bg-slate-800 overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-300 ${
+                                  p.finishedAt
+                                    ? 'bg-[#FACC15]'
+                                    : p.effectState === 'boost'
+                                    ? 'bg-cyan-400'
+                                    : p.effectState === 'penalty'
+                                    ? 'bg-rose-400'
+                                    : 'bg-[#FF6B1A]'
+                                }`}
+                                style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
           {countdownVal !== null && (
             <StadiumCountdownOverlay value={countdownVal} total={countdownTotal} />

@@ -6,7 +6,7 @@ import {
   weightsForVenue,
   type ThemeWeights,
 } from './environmentThemes';
-import { calcTotalLaps } from '../utils/matchScaling';
+import { calcGatesPerLap, calcTotalLaps } from '../utils/matchScaling';
 import {
   evaluateStadiumOval,
   buildOvalRibbonGeometry,
@@ -372,7 +372,7 @@ export function createStadium(
   );
 
   // 5. QUESTION GATE LINES PER LAP (flat across all 30 lanes)
-  const gatesOnLap = Math.min(5, Math.max(1, questionCount));
+  const gatesOnLap = calcGatesPerLap(questionCount);
   const gateFractions = Array.from({ length: gatesOnLap }, (_, idx) => (idx + 1) / (gatesOnLap + 1));
   const gateLineGeo = new THREE.BoxGeometry(trackWidth, 0.03, 2.8);
   disposables.push(gateLineGeo);
