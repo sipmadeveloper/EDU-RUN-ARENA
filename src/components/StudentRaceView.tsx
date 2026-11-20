@@ -43,6 +43,14 @@ import {
   calcTotalLaps,
   formatScoreValue,
 } from '../utils/matchScaling';
+import {
+  projectParticipantPhysics,
+  submitParticipantAnswer,
+  subscribeLiveRoom,
+  syncParticipantFinished,
+  type LiveFirebaseParticipant,
+  type LiveFirebaseRoom,
+} from '../services/firebaseRaceService';
 
 interface ActiveQuestionPayload {
   index: number;
@@ -56,22 +64,7 @@ interface ActiveQuestionPayload {
   questionStartedAt: number;
 }
 
-interface RoomSnapshot {
-  id: string;
-  code: string;
-  name: string;
-  subject: string;
-  grade: string;
-  teacherName: string;
-  schoolName: string;
-  status: RoomStatus;
-  settings: RoomSettings;
-  questionCount: number;
-  totalLaps?: number;
-  pointsPerQuestion?: number;
-  maxScore?: number;
-  participants: PlayerState[];
-}
+const QUESTION_HIDE_GAP_MS = 2200;
 
 interface StudentRaceViewProps {
   session: JoinedSession;
@@ -80,7 +73,7 @@ interface StudentRaceViewProps {
 }
 
 export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: StudentRaceViewProps) {
-  const [room, setRoom] = useState<RoomSnapshot | null>(null);
+  const [room, setRoom] = useState<LiveFirebaseRoom | null>(null);
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [countdownVal, setCountdownVal] = useState<number | null>(null);
   const [countdownTotal, setCountdownTotal] = useState<number>(5);
@@ -103,14 +96,23 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [showResultsOverride, setShowResultsOverride] = useState(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const finishedCelebratedRef = useRef(false);
+  const roomFinishedAudioRef = useRef(false);
+  const finishingSyncRef = useRef(false);
   const commentatorRef = useRef<CommentatorClient | null>(null);
   const livePlayersRef = useRef<PlayerState[]>([]);
   const liveVersionRef = useRef(0);
   const lastHudSyncRef = useRef(0);
   const localPlayerRef = useRef<PlayerState | undefined>(undefined);
+
+  // Authoritative Firestore refs for deterministic 60 FPS dead-reckoning projection
+  const rawRoomRef = useRef<LiveFirebaseRoom | null>(null);
+  const rawParticipantsRef = useRef<LiveFirebaseParticipant[]>([]);
+  const prevParticipantsMapRef = useRef<Map<string, LiveFirebaseParticipant>>(new Map());
+  const lastCountdownTickRef = useRef<number | null>(null);
+  const nextQuestionAllowedAtRef = useRef<number>(0);
+  const submittedQuestionIndicesRef = useRef<Set<number>>(new Set());
 
   const showToast = useCallback((kind: 'boost' | 'penalty' | 'finish', text: string) => {
     setToast({ kind, text });
@@ -118,149 +120,32 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
   }, []);
 
-  // Connect & Auto-Reconnect WebSocket with jittered backoff (zero thundering-herd on school Wi-Fi)
+  // Subscribe to Firestore live room + participants in real time
   useEffect(() => {
-    let cancelled = false;
-    let reconnectTimer: number | null = null;
-    let reconnectAttempt = 0;
-
-    const connect = () => {
-      if (cancelled) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (cancelled) return;
-        reconnectAttempt = 0;
+    const unsub = subscribeLiveRoom(session.roomCode, {
+      onRoom: (nextRoom) => {
+        if (!nextRoom) return;
         setWsConnected(true);
-        ws.send(
-          JSON.stringify({
-            type: 'student:subscribe',
-            roomCode: session.roomCode,
-            participantId: session.participantId,
-            reconnectToken: session.reconnectToken,
-          })
-        );
-      };
+        const prevRoom = rawRoomRef.current;
+        rawRoomRef.current = nextRoom;
+        setRoom(nextRoom);
 
-      ws.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
+        // Immediately project current participants with updated room state
+        if (rawParticipantsRef.current.length > 0) {
+          const now = Date.now();
+          const projected = rawParticipantsRef.current.map((p) =>
+            projectParticipantPhysics(p, nextRoom, now)
+          );
+          livePlayersRef.current = projected;
+          liveVersionRef.current += 1;
+          lastHudSyncRef.current = performance.now();
+          setPlayers(projected);
+        }
 
-          if (msg.type === 'room:state') {
-            const list: PlayerState[] = msg.room.participants || [];
-            livePlayersRef.current = list;
-            liveVersionRef.current += 1;
-            lastHudSyncRef.current = performance.now();
-            setRoom(msg.room);
-            setPlayers(list);
-            if (msg.room.status === 'finished') {
-              setCameraPreset('finish');
-            }
-          } else if (msg.type === 'player:presence') {
-            const nextList = livePlayersRef.current.map((p) =>
-              p.id === msg.participantId ? { ...p, connected: Boolean(msg.connected) } : p
-            );
-            livePlayersRef.current = nextList;
-            liveVersionRef.current += 1;
-            setPlayers(nextList);
-          } else if (msg.type === 'race:countdown') {
-            const totalTicks = typeof msg.total === 'number' && msg.total > 0 ? msg.total : 5;
-            setCountdownVal(msg.value);
-            if (typeof msg.total === 'number' && msg.total > 0) {
-              setCountdownTotal(msg.total);
-            }
-            commentatorRef.current?.playCountdownVoice(msg.value);
-            if (msg.value === 0) {
-              soundEngine.playStartingPistol();
-              soundEngine.playStartWhistle('go');
-              soundEngine.setHeartbeatTension(0);
-              soundEngine.setCrowdMood('playing');
-              soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
-              window.setTimeout(() => setCountdownVal(null), 1100);
-            } else {
-              soundEngine.setCrowdMood('countdown');
-              soundEngine.playCountdownBeep(false);
-              if (msg.value === totalTicks) {
-                soundEngine.playStartWhistle('ready');
-              }
-              const tensionRamp = Math.max(0, Math.min(1, (totalTicks - msg.value + 1) / totalTicks));
-              soundEngine.setHeartbeatTension(0.32 + tensionRamp * 0.54);
-            }
-          } else if (msg.type === 'race:event') {
-            if (msg.kind === 'boost') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
-              );
-            } else if (msg.kind === 'timeout') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} kehabisan waktu soal dan larinya melambat!`
-              );
-            } else if (msg.kind === 'penalty') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} kurang tepat menjawab dan harus melambat sementara!`
-              );
-            }
-          } else if (msg.type === 'question:current') {
-            setCurrentQuestion(msg.question);
-            setQuestionsCompleted(false);
-            setSubmittingIdx(null);
-            setShortAnswerText('');
-            setQuestionTimeLeft(msg.question.timeLimit);
-          } else if (msg.type === 'question:hide') {
-            setCurrentQuestion(null);
-            setSubmittingIdx(null);
-            setShortAnswerText('');
-          } else if (msg.type === 'question:completed') {
-            setQuestionsCompleted(true);
-            setCurrentQuestion(null);
-          } else if (msg.type === 'answer:result') {
-            if (msg.isCorrect) {
-              soundEngine.playCorrectBoost();
-              const ptsText = msg.pointsEarned != null ? ` (+${formatScoreValue(Number(msg.pointsEarned))} Poin)` : '';
-              showToast('boost', `BENAR${ptsText}! SPEED BOOST +${msg.effectDurationSec} DETIK`);
-            } else if (msg.isTimeout) {
-              soundEngine.playWrongPenalty();
-              showToast('penalty', `WAKTU HABIS! LARI SANGAT PELAN ${msg.effectDurationSec} DETIK`);
-            } else {
-              soundEngine.playWrongPenalty();
-              showToast('penalty', `SALAH! LARI SANGAT PELAN ${msg.effectDurationSec} DETIK`);
-            }
-          } else if (msg.type === 'race:tick') {
-            const tickList = msg.players as Array<Partial<PlayerState> & { id: string }>;
-            const tickMap = new Map<string, Partial<PlayerState>>(tickList.map((p) => [p.id, p]));
-            const nextList = livePlayersRef.current.map((p) => {
-              const upd = tickMap.get(p.id);
-              return upd ? { ...p, ...upd } : p;
-            });
-            livePlayersRef.current = nextList;
-            liveVersionRef.current += 1;
-            // Throttle React HUD re-renders to ~4 Hz while 3D arena consumes every tick via ref at 60 FPS
-            const nowPerf = performance.now();
-            if (nowPerf - lastHudSyncRef.current >= 240) {
-              lastHudSyncRef.current = nowPerf;
-              setPlayers(nextList);
-            }
-          } else if (msg.type === 'player:finished') {
-            commentatorRef.current?.pushEvent(
-              `${msg.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${msg.finishRank}!`
-            );
-            if (msg.participantId === session.participantId && !finishedCelebratedRef.current) {
-              finishedCelebratedRef.current = true;
-              soundEngine.setHeartbeatTension(0);
-              soundEngine.playCrowdCheerAndFanfare();
-              setCameraPreset('finish');
-              showToast('finish', `GARIS FINISH! POSISI #${msg.finishRank}`);
-            }
-          } else if (msg.type === 'room:finished') {
-            const list: PlayerState[] = msg.room.participants || [];
-            livePlayersRef.current = list;
-            liveVersionRef.current += 1;
-            lastHudSyncRef.current = performance.now();
-            setRoom(msg.room);
-            setPlayers(list);
-            setCameraPreset('finish');
+        if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
+          setCameraPreset('finish');
+          if (!roomFinishedAudioRef.current) {
+            roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
             soundEngine.setRaceIntensity(0, { allowAutoSwell: false });
             soundEngine.playFinishWhistle();
@@ -271,34 +156,269 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
               soundEngine.triggerCrowdSwell(1.15, 3.2);
             }
           }
-        } catch {
-          // ignore malformed message
         }
-      };
+      },
+      onParticipants: (list) => {
+        setWsConnected(true);
+        // Detect rivals' boost / penalty / finish transitions for live commentator
+        const prevMap = prevParticipantsMapRef.current;
+        if (prevMap.size > 0) {
+          for (const p of list) {
+            const old = prevMap.get(p.id);
+            if (!old) continue;
+            if (!old.finishedAt && p.finishedAt && p.finishedAt > 0) {
+              commentatorRef.current?.pushEvent(
+                `${p.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${p.finishRank ?? 1}!`
+              );
+            } else if (p.answeredCount > old.answeredCount) {
+              if (p.effectState === 'boost') {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
+                );
+              } else if (p.unansweredCount > old.unansweredCount) {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} kehabisan waktu soal dan larinya melambat!`
+                );
+              } else if (p.effectState === 'penalty') {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} kurang tepat menjawab dan harus melambat sementara!`
+                );
+              }
+            }
+          }
+        }
+        prevParticipantsMapRef.current = new Map(list.map((p) => [p.id, p]));
+        rawParticipantsRef.current = list;
 
-      ws.onclose = () => {
-        if (cancelled) return;
+        const currentRoom = rawRoomRef.current;
+        const now = Date.now();
+        const projected = currentRoom
+          ? list.map((p) => projectParticipantPhysics(p, currentRoom, now))
+          : list;
+        livePlayersRef.current = projected;
+        liveVersionRef.current += 1;
+        lastHudSyncRef.current = performance.now();
+        setPlayers(projected);
+      },
+      onError: () => {
         setWsConnected(false);
-        reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
-        const delay = Math.min(3500, 700 * Math.pow(1.45, reconnectAttempt - 1)) + Math.random() * 450;
-        reconnectTimer = window.setTimeout(connect, delay);
-      };
-    };
-
-    connect();
+      },
+    });
 
     return () => {
-      cancelled = true;
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      unsub();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-      wsRef.current?.close();
     };
-  }, [session.participantId, session.reconnectToken, session.roomCode, showToast]);
+  }, [session.roomCode]);
+
+  // Deterministic 10 Hz physics projection (60 FPS interpolation inside StadiumArena3D via ref) + synced countdown driver
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const r = rawRoomRef.current;
+      if (!r) return;
+      const now = Date.now();
+
+      // 1. Synchronized 5 -> 4 -> 3 -> 2 -> 1 -> MULAI! countdown from room.startedAtMs
+      if (r.status === 'countdown' && r.startedAtMs > 0) {
+        const totalTicks = Math.max(
+          3,
+          Math.round((r.startedAtMs - (r.countdownStartMs || r.startedAtMs - 5000)) / 1000)
+        );
+        const remainingSec = Math.max(0, Math.ceil((r.startedAtMs - now) / 1000));
+        if (lastCountdownTickRef.current !== remainingSec) {
+          lastCountdownTickRef.current = remainingSec;
+          setCountdownTotal(totalTicks);
+          setCountdownVal(remainingSec);
+          commentatorRef.current?.playCountdownVoice(remainingSec);
+          if (remainingSec === 0) {
+            soundEngine.playStartingPistol();
+            soundEngine.playStartWhistle('go');
+            soundEngine.setHeartbeatTension(0);
+            soundEngine.setCrowdMood('playing');
+            soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
+            window.setTimeout(() => setCountdownVal(null), 1100);
+          } else {
+            soundEngine.setCrowdMood('countdown');
+            soundEngine.playCountdownBeep(false);
+            if (remainingSec === totalTicks) {
+              soundEngine.playStartWhistle('ready');
+            }
+            const tensionRamp = Math.max(0, Math.min(1, (totalTicks - remainingSec + 1) / totalTicks));
+            soundEngine.setHeartbeatTension(0.32 + tensionRamp * 0.54);
+          }
+        }
+      } else if (r.status === 'playing' && lastCountdownTickRef.current !== null && lastCountdownTickRef.current > 0) {
+        lastCountdownTickRef.current = 0;
+        setCountdownVal(0);
+        soundEngine.playStartingPistol();
+        soundEngine.playStartWhistle('go');
+        soundEngine.setHeartbeatTension(0);
+        soundEngine.setCrowdMood('playing');
+        window.setTimeout(() => setCountdownVal(null), 1100);
+      }
+
+      // 2. Dead-reckoning physics projection for all participants
+      const rawList = rawParticipantsRef.current;
+      if (rawList.length === 0) return;
+
+      const isPlayingNow =
+        r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
+      if (!isPlayingNow) return;
+
+      const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
+      livePlayersRef.current = projected;
+      liveVersionRef.current += 1;
+
+      const nowPerf = performance.now();
+      if (nowPerf - lastHudSyncRef.current >= 240) {
+        lastHudSyncRef.current = nowPerf;
+        setPlayers(projected);
+      }
+
+      // 3. Detect local runner crossing the finish line after completing all questions
+      const localRaw = rawList.find((p) => p.id === session.participantId);
+      const localProj = projected.find((p) => p.id === session.participantId);
+      if (
+        localRaw &&
+        localProj &&
+        !localRaw.finishedAt &&
+        !finishingSyncRef.current &&
+        localRaw.answeredCount >= r.questionCount &&
+        localProj.distance >= r.trackLength - 0.1
+      ) {
+        finishingSyncRef.current = true;
+        const alreadyFinishedCount = rawList.filter((p) => p.finishedAt && p.finishedAt > 0).length;
+        syncParticipantFinished({
+          room: r,
+          participant: localRaw,
+          alreadyFinishedCount,
+        })
+          .then(({ finishRank }) => {
+            if (!finishedCelebratedRef.current) {
+              finishedCelebratedRef.current = true;
+              soundEngine.setHeartbeatTension(0);
+              soundEngine.playCrowdCheerAndFanfare();
+              setCameraPreset('finish');
+              showToast('finish', `GARIS FINISH! POSISI #${finishRank}`);
+            }
+          })
+          .catch(() => {
+            finishingSyncRef.current = false;
+          });
+      }
+    }, 100);
+
+    return () => window.clearInterval(id);
+  }, [session.participantId, showToast]);
 
   const localPlayer = players.find((p) => p.id === session.participantId);
   localPlayerRef.current = localPlayer;
 
-  // Per-second UI countdown for active question (auto-hides on timeout) & boost/penalty timer
+  const isEffectivePlaying = Boolean(
+    room &&
+      (room.status === 'playing' ||
+        (room.status === 'countdown' && room.startedAtMs > 0 && Date.now() >= room.startedAtMs))
+  );
+
+  // Automatic local question delivery & 2.2s cooldown between questions
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const r = rawRoomRef.current;
+      if (!r) return;
+      const now = Date.now();
+      const playing =
+        r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
+      if (!playing) return;
+
+      const localRaw = rawParticipantsRef.current.find((p) => p.id === session.participantId);
+      if (!localRaw || localRaw.finishedAt) return;
+
+      if (localRaw.currentQuestionIndex >= r.questions.length) {
+        setQuestionsCompleted(true);
+        return;
+      }
+
+      if (
+        !currentQuestion &&
+        now >= nextQuestionAllowedAtRef.current &&
+        !submittedQuestionIndicesRef.current.has(localRaw.currentQuestionIndex)
+      ) {
+        const q = r.questions[localRaw.currentQuestionIndex];
+        if (q) {
+          setQuestionsCompleted(false);
+          setSubmittingIdx(null);
+          setShortAnswerText('');
+          setQuestionTimeLeft(r.settings.timePerQuestion);
+          setCurrentQuestion({
+            index: localRaw.currentQuestionIndex,
+            total: r.questionCount,
+            id: q.id,
+            subject: q.subject,
+            questionType: q.questionType,
+            prompt: q.prompt,
+            options: q.options,
+            timeLimit: r.settings.timePerQuestion,
+            questionStartedAt: now,
+          });
+        }
+      }
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [currentQuestion, session.participantId]);
+
+  const submitAnswerInternal = useCallback(
+    async (question: ActiveQuestionPayload, answer: string | null, isTimeout: boolean) => {
+      const r = rawRoomRef.current;
+      const localRaw = rawParticipantsRef.current.find((p) => p.id === session.participantId);
+      if (!r || !localRaw) return;
+      if (submittedQuestionIndicesRef.current.has(question.index)) return;
+
+      submittedQuestionIndicesRef.current.add(question.index);
+      setSubmittingIdx(question.index);
+
+      try {
+        const res = await submitParticipantAnswer({
+          room: r,
+          participant: localRaw,
+          questionIndex: question.index,
+          submittedAnswer: answer,
+          isTimeout,
+          questionStartedAt: question.questionStartedAt,
+        });
+
+        // Immediately reflect locally so runner surges without waiting for round-trip snapshot
+        rawParticipantsRef.current = rawParticipantsRef.current.map((p) =>
+          p.id === localRaw.id ? res.nextParticipant : p
+        );
+
+        if (res.isCorrect) {
+          soundEngine.playCorrectBoost();
+          const ptsText = ` (+${formatScoreValue(res.pointsEarned)} Poin)`;
+          showToast('boost', `BENAR${ptsText}! SPEED BOOST +${res.effectDurationSec} DETIK`);
+        } else if (res.isTimeout) {
+          soundEngine.playWrongPenalty();
+          showToast('penalty', `WAKTU HABIS! LARI SANGAT PELAN ${res.effectDurationSec} DETIK`);
+        } else {
+          soundEngine.playWrongPenalty();
+          showToast('penalty', `SALAH! LARI SANGAT PELAN ${res.effectDurationSec} DETIK`);
+        }
+
+        nextQuestionAllowedAtRef.current = Date.now() + QUESTION_HIDE_GAP_MS;
+        setCurrentQuestion(null);
+        setSubmittingIdx(null);
+        setShortAnswerText('');
+        if (question.index + 1 >= r.questionCount) {
+          setQuestionsCompleted(true);
+        }
+      } catch {
+        submittedQuestionIndicesRef.current.delete(question.index);
+        setSubmittingIdx(null);
+      }
+    },
+    [session.participantId, showToast]
+  );
+
+  // Per-second UI countdown for active question (auto-submits timeout) & boost/penalty timer
   useEffect(() => {
     const id = window.setInterval(() => {
       const now = Date.now();
@@ -307,8 +427,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         const left = Math.max(0, Math.ceil(currentQuestion.timeLimit - elapsedSec));
         setQuestionTimeLeft((prev) => (prev === left ? prev : left));
         if (elapsedSec >= currentQuestion.timeLimit) {
-          setCurrentQuestion(null);
-          setSubmittingIdx(null);
+          submitAnswerInternal(currentQuestion, null, true).catch(() => {});
         }
       }
       const lp = localPlayerRef.current;
@@ -319,20 +438,12 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
       setEffectSecondsLeft((prev) => (prev === nextEffect ? prev : nextEffect));
     }, 250);
     return () => window.clearInterval(id);
-  }, [currentQuestion]);
+  }, [currentQuestion, submitAnswerInternal]);
 
   function handleAnswerSubmit(answer: string) {
     if (!currentQuestion || submittingIdx === currentQuestion.index) return;
-    if (!wsRef.current || wsRef.current.readyState !== 1) return;
     soundEngine.unlock();
-    setSubmittingIdx(currentQuestion.index);
-    wsRef.current.send(
-      JSON.stringify({
-        type: 'student:submit_answer',
-        questionIndex: currentQuestion.index,
-        answer,
-      })
-    );
+    submitAnswerInternal(currentQuestion, answer, false).catch(() => {});
   }
 
   function toggleMute() {
@@ -395,7 +506,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     activeVenue === 'stadium_day' ? Sun : activeVenue === 'stadium_night' ? Moon : Trees;
 
   // Ambient stadium crowd + dynamic race intensity + heartbeat tension synced with live race state
-  const roomStatus = room?.status ?? 'waiting';
+  const roomStatus: RoomStatus = isEffectivePlaying ? 'playing' : room?.status ?? 'waiting';
   const audioTelemetry = useMemo(() => {
     if (roomStatus !== 'playing') {
       return { hasHighExcitement: false, raceIntensity: 0, heartbeatTension: 0 };
@@ -530,7 +641,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           livePlayersRef={livePlayersRef}
           liveVersionRef={liveVersionRef}
           localPlayerId={session.participantId}
-          roomStatus={room?.status || 'waiting'}
+          roomStatus={roomStatus}
           roomName={room?.name || 'EDU RUN ARENA 3D'}
           cameraPreset={cameraPreset}
           venue={activeVenue}
@@ -682,7 +793,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
       )}
 
       {/* ==================== ACTIVE PLAYING HUD ==================== */}
-      {room?.status === 'playing' && (
+      {isEffectivePlaying && (
         <div className="absolute inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4 pointer-events-none">
           {/* TOP BAR PERIMETER + NON-INTRUSIVE TOAST */}
           <div className="space-y-2">

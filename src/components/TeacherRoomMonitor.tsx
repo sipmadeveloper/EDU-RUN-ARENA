@@ -37,21 +37,17 @@ import {
   calcTotalLaps,
   formatScoreValue,
 } from '../utils/matchScaling';
-
-interface RoomMonitorDetail {
-  id: string;
-  code: string;
-  name: string;
-  subject: string;
-  grade: string;
-  status: RoomStatus;
-  settings: RoomSettings;
-  questionCount: number;
-  totalLaps?: number;
-  pointsPerQuestion?: number;
-  maxScore?: number;
-  participants: PlayerState[];
-}
+import { formatFriendlyFirestoreError } from '../firebase';
+import {
+  activatePlayingFirebaseRoom,
+  downloadRoomExcelFromFirebase,
+  finishFirebaseRoom,
+  projectParticipantPhysics,
+  startFirebaseRoom,
+  subscribeLiveRoom,
+  type LiveFirebaseParticipant,
+  type LiveFirebaseRoom,
+} from '../services/firebaseRaceService';
 
 interface TeacherRoomMonitorProps {
   roomId: string;
@@ -62,17 +58,17 @@ interface TeacherRoomMonitorProps {
 
 export function TeacherRoomMonitor({
   roomId,
-  token,
   onBack,
   onOpenResults,
 }: TeacherRoomMonitorProps) {
-  const [room, setRoom] = useState<RoomMonitorDetail | null>(null);
+  const [room, setRoom] = useState<LiveFirebaseRoom | null>(null);
   const [players, setPlayers] = useState<PlayerState[]>([]);
   const [countdownVal, setCountdownVal] = useState<number | null>(null);
   const [countdownTotal, setCountdownTotal] = useState<number>(5);
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [excelBusy, setExcelBusy] = useState(false);
   const [error, setError] = useState('');
   const [cameraPreset, setCameraPreset] = useState<'chase' | 'broadcast' | 'finish'>('broadcast');
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
@@ -82,169 +78,186 @@ export function TeacherRoomMonitor({
   const [commentatorCaption, setCommentatorCaption] = useState<CommentatorCaption | null>(null);
   const [commentatorError, setCommentatorError] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
   const commentatorRef = useRef<CommentatorClient | null>(null);
   const livePlayersRef = useRef<PlayerState[]>([]);
   const liveVersionRef = useRef(0);
   const lastHudSyncRef = useRef(0);
 
+  const rawRoomRef = useRef<LiveFirebaseRoom | null>(null);
+  const rawParticipantsRef = useRef<LiveFirebaseParticipant[]>([]);
+  const prevParticipantsMapRef = useRef<Map<string, LiveFirebaseParticipant>>(new Map());
+  const lastCountdownTickRef = useRef<number | null>(null);
+  const activatingPlayingRef = useRef(false);
+  const autoFinishingRef = useRef(false);
+  const roomFinishedAudioRef = useRef(false);
+
   useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/rooms/${roomId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        if (data.room) {
-          const list: PlayerState[] = data.room.participants || [];
-          livePlayersRef.current = list;
+    const unsub = subscribeLiveRoom(roomId, {
+      onRoom: (nextRoom) => {
+        if (!nextRoom) {
+          setError('Room tidak ditemukan atau sudah dihapus.');
+          return;
+        }
+        const prevRoom = rawRoomRef.current;
+        rawRoomRef.current = nextRoom;
+        setRoom(nextRoom);
+
+        if (rawParticipantsRef.current.length > 0) {
+          const now = Date.now();
+          const projected = rawParticipantsRef.current.map((p) =>
+            projectParticipantPhysics(p, nextRoom, now)
+          );
+          livePlayersRef.current = projected;
           liveVersionRef.current += 1;
           lastHudSyncRef.current = performance.now();
-          setRoom(data.room);
-          setPlayers(list);
-        } else {
-          setError(data.error || 'Gagal memuat room.');
+          setPlayers(projected);
         }
-      })
-      .catch(() => {
-        if (!cancelled) setError('Gagal terhubung ke server.');
-      });
 
-    let reconnectTimer: number | null = null;
-    let reconnectAttempt = 0;
-
-    const connectWs = () => {
-      if (cancelled) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (cancelled) return;
-        reconnectAttempt = 0;
-        ws.send(JSON.stringify({ type: 'teacher:subscribe', roomId }));
-      };
-
-      ws.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === 'room:state') {
-            const list: PlayerState[] = msg.room.participants || [];
-            livePlayersRef.current = list;
-            liveVersionRef.current += 1;
-            lastHudSyncRef.current = performance.now();
-            setRoom(msg.room);
-            setPlayers(list);
-          } else if (msg.type === 'player:presence') {
-            const nextList = livePlayersRef.current.map((p) =>
-              p.id === msg.participantId ? { ...p, connected: Boolean(msg.connected) } : p
-            );
-            livePlayersRef.current = nextList;
-            liveVersionRef.current += 1;
-            setPlayers(nextList);
-          } else if (msg.type === 'race:countdown') {
-            const totalTicks = typeof msg.total === 'number' && msg.total > 0 ? msg.total : 5;
-            setCountdownVal(msg.value);
-            if (typeof msg.total === 'number' && msg.total > 0) {
-              setCountdownTotal(msg.total);
-            }
-            commentatorRef.current?.playCountdownVoice(msg.value);
-            if (msg.value === 0) {
-              soundEngine.playStartingPistol();
-              soundEngine.playStartWhistle('go');
-              soundEngine.setHeartbeatTension(0);
-              soundEngine.setCrowdMood('playing');
-              soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
-              window.setTimeout(() => setCountdownVal(null), 1100);
-            } else {
-              soundEngine.setCrowdMood('countdown');
-              soundEngine.playCountdownBeep(false);
-              if (msg.value === totalTicks) {
-                soundEngine.playStartWhistle('ready');
-              }
-              const tensionRamp = Math.max(0, Math.min(1, (totalTicks - msg.value + 1) / totalTicks));
-              soundEngine.setHeartbeatTension(0.32 + tensionRamp * 0.54);
-            }
-          } else if (msg.type === 'race:event') {
-            if (msg.kind === 'boost') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
-              );
-            } else if (msg.kind === 'timeout') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} kehabisan waktu soal dan larinya melambat!`
-              );
-            } else if (msg.kind === 'penalty') {
-              commentatorRef.current?.pushEvent(
-                `${msg.name} kurang tepat menjawab dan harus melambat sementara!`
-              );
-            }
-          } else if (msg.type === 'race:tick') {
-            const tickList = msg.players as Array<Partial<PlayerState> & { id: string }>;
-            const map = new Map<string, Partial<PlayerState>>(tickList.map((p) => [p.id, p]));
-            const nextList = livePlayersRef.current.map((p) => (map.has(p.id) ? { ...p, ...map.get(p.id) } : p));
-            livePlayersRef.current = nextList;
-            liveVersionRef.current += 1;
-            const nowPerf = performance.now();
-            if (nowPerf - lastHudSyncRef.current >= 240) {
-              lastHudSyncRef.current = nowPerf;
-              setPlayers(nextList);
-            }
-          } else if (msg.type === 'player:finished') {
-            soundEngine.triggerCrowdSwell(0.85, 2.2);
-            commentatorRef.current?.pushEvent(
-              `${msg.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${msg.finishRank}!`
-            );
-          } else if (msg.type === 'room:finished') {
-            const list: PlayerState[] = msg.room.participants || [];
-            livePlayersRef.current = list;
-            liveVersionRef.current += 1;
-            lastHudSyncRef.current = performance.now();
-            setRoom(msg.room);
-            setPlayers(list);
-            setCameraPreset('finish');
+        if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
+          setCameraPreset('finish');
+          if (!roomFinishedAudioRef.current) {
+            roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
             soundEngine.setRaceIntensity(0, { allowAutoSwell: false });
             soundEngine.playFinishWhistle();
             soundEngine.setCrowdMood('victory');
             soundEngine.startVictoryMusic();
           }
-        } catch {
-          // ignore
         }
-      };
+      },
+      onParticipants: (list) => {
+        const prevMap = prevParticipantsMapRef.current;
+        if (prevMap.size > 0) {
+          for (const p of list) {
+            const old = prevMap.get(p.id);
+            if (!old) continue;
+            if (!old.finishedAt && p.finishedAt && p.finishedAt > 0) {
+              soundEngine.triggerCrowdSwell(0.85, 2.2);
+              commentatorRef.current?.pushEvent(
+                `${p.name || 'Peserta'} baru saja MENEMBUS GARIS FINISH di posisi #${p.finishRank ?? 1}!`
+              );
+            } else if (p.answeredCount > old.answeredCount) {
+              if (p.effectState === 'boost') {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} menjawab BENAR dan melesat kencang dengan SPEED BOOST!`
+                );
+              } else if (p.unansweredCount > old.unansweredCount) {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} kehabisan waktu soal dan larinya melambat!`
+                );
+              } else if (p.effectState === 'penalty') {
+                commentatorRef.current?.pushEvent(
+                  `${p.name} kurang tepat menjawab dan harus melambat sementara!`
+                );
+              }
+            }
+          }
+        }
+        prevParticipantsMapRef.current = new Map(list.map((p) => [p.id, p]));
+        rawParticipantsRef.current = list;
 
-      ws.onclose = () => {
-        if (cancelled) return;
-        reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
-        const delay = Math.min(3500, 700 * Math.pow(1.45, reconnectAttempt - 1)) + Math.random() * 400;
-        reconnectTimer = window.setTimeout(connectWs, delay);
-      };
-    };
+        const currentRoom = rawRoomRef.current;
+        const now = Date.now();
+        const projected = currentRoom
+          ? list.map((p) => projectParticipantPhysics(p, currentRoom, now))
+          : list;
+        livePlayersRef.current = projected;
+        liveVersionRef.current += 1;
+        lastHudSyncRef.current = performance.now();
+        setPlayers(projected);
+      },
+      onError: (err) => {
+        setError(formatFriendlyFirestoreError(err));
+      },
+    });
 
-    connectWs();
+    return () => unsub();
+  }, [roomId]);
 
-    return () => {
-      cancelled = true;
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      wsRef.current?.close();
-    };
-  }, [roomId, token]);
+  // 10 Hz physics projection + countdown transition + auto-finish when all participants finish
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const r = rawRoomRef.current;
+      if (!r) return;
+      const now = Date.now();
+      const rawList = rawParticipantsRef.current;
+
+      // 1. Synchronized countdown + automatic countdown -> playing status update
+      if (r.status === 'countdown' && r.startedAtMs > 0) {
+        const totalTicks = Math.max(
+          3,
+          Math.round((r.startedAtMs - (r.countdownStartMs || r.startedAtMs - 5000)) / 1000)
+        );
+        const remainingSec = Math.max(0, Math.ceil((r.startedAtMs - now) / 1000));
+        if (lastCountdownTickRef.current !== remainingSec) {
+          lastCountdownTickRef.current = remainingSec;
+          setCountdownTotal(totalTicks);
+          setCountdownVal(remainingSec);
+          commentatorRef.current?.playCountdownVoice(remainingSec);
+          if (remainingSec === 0) {
+            soundEngine.playStartingPistol();
+            soundEngine.playStartWhistle('go');
+            soundEngine.setHeartbeatTension(0);
+            soundEngine.setCrowdMood('playing');
+            soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
+            window.setTimeout(() => setCountdownVal(null), 1100);
+          } else {
+            soundEngine.setCrowdMood('countdown');
+            soundEngine.playCountdownBeep(false);
+            if (remainingSec === totalTicks) {
+              soundEngine.playStartWhistle('ready');
+            }
+            const tensionRamp = Math.max(0, Math.min(1, (totalTicks - remainingSec + 1) / totalTicks));
+            soundEngine.setHeartbeatTension(0.32 + tensionRamp * 0.54);
+          }
+        }
+        if (now >= r.startedAtMs && !activatingPlayingRef.current) {
+          activatingPlayingRef.current = true;
+          activatePlayingFirebaseRoom(r.code, rawList.length).catch(() => {
+            activatingPlayingRef.current = false;
+          });
+        }
+      }
+
+      // 2. Project 60 FPS runner positions
+      const isPlayingNow =
+        r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
+      if (isPlayingNow && rawList.length > 0) {
+        const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
+        livePlayersRef.current = projected;
+        liveVersionRef.current += 1;
+        const nowPerf = performance.now();
+        if (nowPerf - lastHudSyncRef.current >= 240) {
+          lastHudSyncRef.current = nowPerf;
+          setPlayers(projected);
+        }
+      }
+
+      // 3. Auto-finish match once every participant in the room has crossed the finish line
+      if (
+        r.status === 'playing' &&
+        rawList.length > 0 &&
+        !autoFinishingRef.current &&
+        rawList.every((p) => p.finishedAt && p.finishedAt > 0)
+      ) {
+        autoFinishingRef.current = true;
+        finishFirebaseRoom(r.code).catch(() => {
+          autoFinishingRef.current = false;
+        });
+      }
+    }, 100);
+
+    return () => window.clearInterval(id);
+  }, []);
 
   async function handleStartMatch() {
     soundEngine.unlock();
     setActionBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/rooms/${roomId}/start`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) setError(data.error || 'Gagal memulai pertandingan.');
-    } catch {
-      setError('Gagal menghubungi server.');
+      await startFirebaseRoom(roomId, rawParticipantsRef.current.length);
+    } catch (err) {
+      setError(formatFriendlyFirestoreError(err));
     } finally {
       setActionBusy(false);
     }
@@ -254,16 +267,24 @@ export function TeacherRoomMonitor({
     setActionBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/rooms/${roomId}/close`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) setError(data.error || 'Gagal mengakhiri pertandingan.');
-    } catch {
-      setError('Gagal menghubungi server.');
+      await finishFirebaseRoom(roomId);
+    } catch (err) {
+      setError(formatFriendlyFirestoreError(err));
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function handleDownloadExcel() {
+    if (!room || excelBusy) return;
+    setExcelBusy(true);
+    setError('');
+    try {
+      await downloadRoomExcelFromFirebase(room.code);
+    } catch (err) {
+      setError(formatFriendlyFirestoreError(err));
+    } finally {
+      setExcelBusy(false);
     }
   }
 
@@ -541,13 +562,15 @@ export function TeacherRoomMonitor({
                 <Trophy className="w-4 h-4" />
                 <span>Lihat Hasil & Podium</span>
               </button>
-              <a
-                href={`/api/rooms/${room.id}/export-excel?token=${encodeURIComponent(token)}`}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm text-white"
+              <button
+                type="button"
+                onClick={handleDownloadExcel}
+                disabled={excelBusy}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 font-semibold text-sm text-white cursor-pointer"
               >
                 <Download className="w-4 h-4" />
-                <span>Download Excel</span>
-              </a>
+                <span>{excelBusy ? 'Menyiapkan Excel...' : 'Download Excel'}</span>
+              </button>
             </>
           )}
         </div>

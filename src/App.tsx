@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, clearDriveAccessToken } from './firebase';
+import {
+  cloudProfileToTeacherProfile,
+  ensureTeacherCloudProfile,
+} from './services/firebaseCloudStore';
 import type { TeacherProfile } from './types/game';
 import { LandingScreen } from './components/LandingScreen';
 import { HowToPlayModal } from './components/HowToPlayModal';
@@ -97,13 +101,7 @@ export default function App() {
     subtitle: string;
   } | null>(null);
 
-  const [teacherToken, setTeacherToken] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('edurun_teacher_token');
-    } catch {
-      return null;
-    }
-  });
+  const [teacherToken, setTeacherToken] = useState<string | null>(null);
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
 
   const swapTimerRef = useRef<number | null>(null);
@@ -145,23 +143,24 @@ export default function App() {
     [clearTransitionTimers]
   );
 
-  // Restore teacher session automatically if token exists
+  // Restore teacher session automatically from Firebase Auth
   useEffect(() => {
-    if (!teacherToken || teacherProfile) return;
-    fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${teacherToken}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.teacher) {
-          setTeacherProfile(data.teacher);
-        } else {
-          localStorage.removeItem('edurun_teacher_token');
-          setTeacherToken(null);
-        }
-      })
-      .catch(() => {});
-  }, [teacherToken, teacherProfile]);
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setTeacherToken(null);
+        setTeacherProfile(null);
+        return;
+      }
+      try {
+        const cloudProfile = await ensureTeacherCloudProfile(user, null);
+        setTeacherToken(user.uid);
+        setTeacherProfile(cloudProfileToTeacherProfile(user.uid, cloudProfile));
+      } catch {
+        // Ignore transient network errors; user can re-sign in via Portal Guru
+      }
+    });
+    return () => unsub();
+  }, []);
 
   const clearSavedRaceSession = useCallback(() => {
     try {

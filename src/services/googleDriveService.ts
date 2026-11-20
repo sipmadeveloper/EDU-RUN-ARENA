@@ -1,4 +1,5 @@
 import { clearDriveAccessToken } from '../firebase';
+import { buildRoomExcelBlobFromFirebase } from './firebaseRaceService';
 import type { QuestionItem, QuestionType, RoomSummary } from '../types/game';
 
 export const EDU_RUN_FOLDER_NAME = 'EDU RUN ARENA 3D';
@@ -345,21 +346,14 @@ export function buildRoomExcelFileName(room: Pick<RoomSummary, 'code' | 'name'>)
 }
 
 /**
- * Fetches the room's .xlsx report from the server and uploads it directly into the teacher's personal Google Drive.
+ * Builds the room's 3-sheet .xlsx report in the browser from Firebase and uploads it directly into the teacher's personal Google Drive.
  */
 export async function uploadRoomExcelToDrive(
   accessToken: string,
-  serverToken: string,
   room: Pick<RoomSummary, 'id' | 'code' | 'name'>,
   existingFileId?: string
 ): Promise<DriveFileItem> {
-  const excelRes = await fetch(
-    `/api/rooms/${encodeURIComponent(room.id)}/export-excel?token=${encodeURIComponent(serverToken)}`
-  );
-  if (!excelRes.ok) {
-    throw new Error('Gagal membuat file Excel dari server.');
-  }
-  const xlsxBlob = await excelRes.blob();
+  const { blob: xlsxBlob } = await buildRoomExcelBlobFromFirebase(room.code);
   const folder = await ensureEduRunDriveFolder(accessToken);
   const fileName = buildRoomExcelFileName(room);
 

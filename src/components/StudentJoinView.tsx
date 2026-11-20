@@ -12,6 +12,8 @@ import {
 import { AvatarPreview3D } from './AvatarPreview3D';
 import { AppLogo } from './AppLogo';
 import { soundEngine } from '../audio/soundEngine';
+import { formatFriendlyFirestoreError } from '../firebase';
+import { joinFirebaseRoom, lookupPublicRoom } from '../services/firebaseRaceService';
 
 export interface JoinedSession {
   roomCode: string;
@@ -80,17 +82,12 @@ export function StudentJoinView({ initialCode = '', onBack, onJoined }: StudentJ
     setLookupLoading(true);
     setLookupError('');
     try {
-      const res = await fetch(`/api/public/rooms/${encodeURIComponent(code)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setRoomInfo(null);
-        setLookupError(data.error || 'Kode room tidak ditemukan.');
-      } else {
-        setRoomInfo(data.room);
-        setRoomCode(data.room.code);
-      }
-    } catch {
-      setLookupError('Gagal terhubung ke server.');
+      const found = await lookupPublicRoom(code);
+      setRoomInfo(found);
+      setRoomCode(found.code);
+    } catch (err) {
+      setRoomInfo(null);
+      setLookupError(formatFriendlyFirestoreError(err));
     } finally {
       setLookupLoading(false);
     }
@@ -121,22 +118,13 @@ export function StudentJoinView({ initialCode = '', onBack, onJoined }: StudentJ
     }
 
     try {
-      const res = await fetch(`/api/public/rooms/${encodeURIComponent(roomInfo.code)}/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          className: className.trim(),
-          avatar,
-          participantId: savedToken.participantId,
-          reconnectToken: savedToken.reconnectToken,
-        }),
+      const data = await joinFirebaseRoom(roomInfo.code, {
+        name: name.trim(),
+        className: className.trim(),
+        avatar,
+        participantId: savedToken.participantId,
+        reconnectToken: savedToken.reconnectToken,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setJoinError(data.error || 'Gagal masuk ke room.');
-        return;
-      }
 
       const session: JoinedSession = {
         roomCode: roomInfo.code,
@@ -158,8 +146,8 @@ export function StudentJoinView({ initialCode = '', onBack, onJoined }: StudentJ
         // ignore storage error
       }
       onJoined(session);
-    } catch {
-      setJoinError('Terjadi gangguan jaringan. Coba lagi.');
+    } catch (err) {
+      setJoinError(formatFriendlyFirestoreError(err));
     } finally {
       setJoinLoading(false);
     }

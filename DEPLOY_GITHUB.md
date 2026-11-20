@@ -1,49 +1,53 @@
-# Panduan Deploy 100% dari HP (Gratis Tanpa Kartu Kredit): GitHub → Hugging Face Spaces
+# Panduan Deploy Gratis EDU RUN ARENA 3D (GitHub + Vercel + Firebase)
 
-Proyek **EDU RUN ARENA 3D** sudah dilengkapi otomatisasi **GitHub Actions** (`.github/workflows/sync-huggingface.yml`) + **`Dockerfile`** + **`README.md`**. Anda cukup melakukan beberapa ketukan dari browser HP — **tanpa laptop, tanpa terminal, tanpa upload ZIP, dan tanpa kartu kredit**.
+**EDU RUN ARENA 3D** sekarang berjalan **100% Serverless** menggunakan **Vercel (Gratis)** + **Firebase Firestore (Spark Free Tier)** + **Google Drive Pribadi Guru**.
+- **Tanpa kartu kredit**
+- **Tanpa server Node.js / Docker berbayar**
+- **Bisa di-deploy langsung lewat browser HP dalam 2 menit!**
 
 ---
 
-## Langkah 1: Simpan Proyek ke GitHub
-1. Simpan / ekspor proyek ini ke repositori **GitHub** Anda (misalnya bernama `edu-run-arena-3d`).
+## Langkah 1 — Pastikan Kode Terbaru Sudah di GitHub
+1. Dari AI Studio, simpan/push perubahan terbaru ini ke repositori GitHub Anda (misalnya `sipmadeveloper/EDU-RUN-ARENA`).
+2. Workflow Hugging Face lama sudah dihapus agar tab **Actions** di GitHub bersih tanpa tanda silang merah.
 
-## Langkah 2: Ambil Token dari Hugging Face (Cukup Sekali)
-1. Daftar / login gratis di [huggingface.co](https://huggingface.co/) lewat browser HP.
-2. Catat **Username** Hugging Face Anda (contoh: `gurukreatif`).
-3. Buka [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) → klik **+ Create new token**.
-4. Pilih tipe **Write**, beri nama bebas (misalnya `github-deploy`) → klik **Create token**.
-5. **Salin token** yang muncul (`hf_xxxxxxxx...`).
+---
 
-## Langkah 3: Tempel Token ke GitHub (Dari Browser HP)
-1. Buka repositori GitHub proyek Anda → klik tab **Settings**.
-2. Di menu samping, buka **Secrets and variables** → klik **Actions**.
-3. Klik **New repository secret** sebanyak 2 kali untuk menambahkan:
-   - Secret 1:
-     - **Name**: `HF_USERNAME`
-     - **Secret**: username Hugging Face Anda *(contoh: `gurukreatif`)*
-   - Secret 2:
-     - **Name**: `HF_TOKEN`
-     - **Secret**: tempel token `hf_xxxxxxxx...` dari Langkah 2
+## Langkah 2 — Deploy ke Vercel (Gratis, Bisa dari HP)
+1. Buka **[https://vercel.com](https://vercel.com)** di browser HP atau laptop.
+2. Klik **Sign Up / Log In** lalu pilih **Continue with GitHub**.
+3. Klik tombol **Add New… → Project**.
+4. Pilih repositori **EDU-RUN-ARENA**, lalu klik **Import**.
+5. Pastikan pengaturan berikut sudah terdeteksi otomatis:
+   - **Framework Preset**: `Vite`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+   - *(Tidak perlu mengisi Environment Variable apa pun — konfigurasi Firebase sudah tertanam aman di proyek!)*
+6. Klik tombol **Deploy** dan tunggu sekitar 1–2 menit sampai muncul status **Congratulations / Ready** beserta alamat website, misalnya:
+   `https://edu-run-arena.vercel.app`
 
-## Langkah 4: Jalankan Deploy 1-Klik!
-1. Di repositori GitHub Anda, buka tab **Actions**.
-2. Klik **Deploy Otomatis ke Hugging Face Spaces**.
-3. Klik tombol **Run workflow** → klik **Run workflow** (hijau).
-4. Tunggu ~30 detik sampai muncul centang hijau — GitHub akan **otomatis membuat Space `edu-run-arena-3d` di akun Hugging Face Anda** dan mengirim seluruh kode beserta logo PNG-nya!
-5. Buka `https://huggingface.co/spaces/USERNAME_ANDA/edu-run-arena-3d` dan tunggu 2–4 menit sampai status berubah menjadi hijau **Running**.
-6. **URL Langsung Aplikasi Anda** (bagikan link ini ke guru & siswa):
-   ```
-   https://USERNAME_ANDA-edu-run-arena-3d.hf.space
-   ```
+---
 
-## Langkah 5: Daftarkan Domain `.hf.space` ke Firebase & Google Drive OAuth
-Agar **Login Google Guru** & **Google Drive otomatis** aktif:
-1. **Firebase Authorized Domains**:
-   - Buka: https://console.firebase.google.com/project/gen-lang-client-0581931190/authentication/settings
-   - Tab **Authorized domains** → **Add domain** → masukkan `USERNAME_ANDA-edu-run-arena-3d.hf.space` *(tanpa `https://`)* → **Add**.
-2. **Google Cloud OAuth (Google Drive)**:
-   - Buka: https://console.cloud.google.com/apis/credentials?project=gen-lang-client-0581931190
-   - Klik Client ID (`302879231437-jdpgoere4q7hujlnda6k5u77bs5sck17.apps.googleusercontent.com`).
-   - Di **Authorized JavaScript origins** → **+ ADD URI** → masukkan `https://USERNAME_ANDA-edu-run-arena-3d.hf.space` → **Save**.
+## Langkah 3 — Daftarkan Domain Vercel agar Login Google & Drive Aktif
+Agar guru bisa menekan tombol **Sign in with Google** dan **Google Drive** di alamat Vercel baru Anda:
 
-Selesai! Setiap kali nanti ada pembaruan dan Anda simpan ke GitHub, **Hugging Face akan ter-update otomatis**.
+### A. Firebase Authorized Domains
+1. Buka **[Firebase Console](https://console.firebase.google.com/)** → pilih proyek **`gen-lang-client-0581931190`**.
+2. Masuk ke menu **Authentication → Settings → Authorized domains**.
+3. Klik **Add domain**, lalu masukkan domain Vercel Anda (tanpa `https://`), contoh:
+   `edu-run-arena.vercel.app`
+4. Klik **Add**.
+
+### B. Google Cloud OAuth Authorized JavaScript Origins (Untuk Google Drive)
+1. Buka **[Google Cloud Console — Credentials](https://console.cloud.google.com/apis/credentials)** pada proyek yang sama.
+2. Klik **OAuth 2.0 Client ID** yang digunakan aplikasi.
+3. Pada bagian **Authorized JavaScript origins**, klik **+ ADD URI** dan masukkan alamat lengkap dengan `https://`, contoh:
+   `https://edu-run-arena.vercel.app`
+4. Klik **Save**.
+
+---
+
+## Selesai!
+- **Guru** login dengan akun Google, membuat room, mengelola Bank Soal (termasuk impor `.docx` dan ekspor `.xlsx` langsung di browser), serta memantau balapan 3D secara real-time.
+- **Siswa** cukup buka link Vercel dari HP/laptop, masukkan **Kode Room 6 karakter** (atau klik Link Peserta dari guru), pilih karakter 3D, dan langsung bertanding!
+- Setiap kali Anda push pembaruan kode ke GitHub, **Vercel akan otomatis melakukan deploy ulang**.

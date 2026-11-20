@@ -18,13 +18,9 @@ import {
   Copy,
   Check,
   Download,
-  Upload,
   Eye,
   AlertCircle,
   CheckCircle2,
-  Search,
-  Edit3,
-  Sparkles,
   Sun,
   Moon,
   Trees,
@@ -45,9 +41,12 @@ import {
 import { TeacherRoomMonitor } from './TeacherRoomMonitor';
 import { VictoryPodium3D } from './VictoryPodium3D';
 import { FirebaseCloudPanel } from './FirebaseCloudPanel';
+import { WordImportModule } from './WordImportModule';
+import { QuestionBankSection } from './QuestionBankSection';
 import { AppLogo } from './AppLogo';
 import {
   clearDriveAccessToken,
+  formatFriendlyFirestoreError,
   getDriveAccessToken,
   signInWithGoogleDrive,
   subscribeDriveToken,
@@ -57,6 +56,21 @@ import {
   EDU_RUN_FOLDER_NAME,
   uploadRoomExcelToDrive,
 } from '../services/googleDriveService';
+import {
+  loadQuestionBankFromCloud,
+  syncQuestionBankToCloud,
+  updateTeacherCloudProfileFull,
+} from '../services/firebaseCloudStore';
+import {
+  createFirebaseRoom,
+  deleteFirebaseRoom,
+  downloadRoomExcelFromFirebase,
+  finishFirebaseRoom,
+  getFirebaseRoomResults,
+  listTeacherRooms,
+  startFirebaseRoom,
+} from '../services/firebaseRaceService';
+import { buildStarterQuestionItems } from '../services/starterQuestions';
 import {
   MAX_MATCH_SCORE,
   calcPointsPerQuestion,
@@ -76,19 +90,6 @@ type DashboardTab =
   | 'cloud'
   | 'settings'
   | 'profile';
-
-interface WordPreviewItem {
-  number: number;
-  prompt: string;
-  questionType: QuestionType;
-  options: { A?: string; B?: string; C?: string; D?: string };
-  correctAnswer: string;
-  explanation: string;
-  valid: boolean;
-  warnings: string[];
-  isDuplicate: boolean;
-  selected?: boolean;
-}
 
 interface RoomResultDetail {
   room: {
@@ -165,11 +166,6 @@ export function TeacherDashboard({
   const [rmPickManual, setRmPickManual] = useState(false);
   const [rmSelectedQIds, setRmSelectedQIds] = useState<string[]>([]);
 
-  // Bank Soal Filter & Edit
-  const [qFilterSubject, setQFilterSubject] = useState('Semua');
-  const [qSearch, setQSearch] = useState('');
-  const [editingQ, setEditingQ] = useState<QuestionItem | null>(null);
-
   // Add Question Manual Form
   const [newQSubject, setNewQSubject] = useState('Matematika');
   const [newQGrade, setNewQGrade] = useState('Umum');
@@ -178,12 +174,6 @@ export function TeacherDashboard({
   const [newQOpts, setNewQOpts] = useState({ A: '', B: '', C: '', D: '' });
   const [newQCorrect, setNewQCorrect] = useState('A');
   const [newQExp, setNewQExp] = useState('');
-
-  // Word Import State
-  const [wordSubject, setWordSubject] = useState('Umum');
-  const [wordGrade, setWordGrade] = useState('Umum');
-  const [wordPreview, setWordPreview] = useState<WordPreviewItem[] | null>(null);
-  const [wordBusy, setWordBusy] = useState(false);
 
   // Results Viewer State
   const [selectedResultRoomId, setSelectedResultRoomId] = useState<string>('');
@@ -195,9 +185,10 @@ export function TeacherDashboard({
   const [profName, setProfName] = useState(teacher.name);
   const [profSchool, setProfSchool] = useState(teacher.schoolName);
 
-  // Direct Excel -> Google Drive upload confirmation state
+  // Direct Excel -> Google Drive upload confirmation & browser Excel download busy state
   const [driveExcelConfirmRoom, setDriveExcelConfirmRoom] = useState<RoomSummary | null>(null);
   const [driveExcelBusyId, setDriveExcelBusyId] = useState<string | null>(null);
+  const [excelDownloadBusyId, setExcelDownloadBusyId] = useState<string | null>(null);
   const [driveConnected, setDriveConnected] = useState<boolean>(() => Boolean(getDriveAccessToken()));
 
   useEffect(() => {
@@ -214,25 +205,31 @@ export function TeacherDashboard({
   const fetchAll = useCallback(async () => {
     setLoadingData(true);
     try {
-      const [rRes, qRes] = await Promise.all([
-        fetch('/api/rooms', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/questions', { headers: { Authorization: `Bearer ${token}` } }),
+      const [roomList, cloudBank] = await Promise.all([
+        listTeacherRooms(teacher.id),
+        loadQuestionBankFromCloud(teacher.id),
       ]);
-      const rData = await rRes.json();
-      const qData = await qRes.json();
-      if (rData.rooms) {
-        setRooms(rData.rooms);
-        if (!selectedResultRoomId && rData.rooms.length > 0) {
-          setSelectedResultRoomId(rData.rooms[0].id);
-        }
+      setRooms(roomList);
+      if (!selectedResultRoomId && roomList.length > 0) {
+        setSelectedResultRoomId(roomList[0].id);
       }
-      if (qData.questions) setQuestions(qData.questions);
-    } catch {
-      notify('err', 'Gagal memuat data dashboard dari server.');
+      const mappedQuestions: QuestionItem[] = cloudBank.questions.map((q) => ({
+        id: q.id,
+        subject: q.subject,
+        grade: q.grade,
+        questionType: q.questionType,
+        prompt: q.prompt,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation,
+      }));
+      setQuestions(mappedQuestions);
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     } finally {
       setLoadingData(false);
     }
-  }, [token, notify, selectedResultRoomId]);
+  }, [teacher.id, notify, selectedResultRoomId]);
 
   useEffect(() => {
     fetchAll();
@@ -240,16 +237,15 @@ export function TeacherDashboard({
 
   useEffect(() => {
     if (activeTab === 'results' && selectedResultRoomId) {
-      fetch(`/api/rooms/${selectedResultRoomId}/results`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((r) => r.json())
+      getFirebaseRoomResults(selectedResultRoomId)
         .then((data) => {
-          if (data.room) setResultDetail(data);
+          setResultDetail(data);
         })
-        .catch(() => {});
+        .catch(() => {
+          setResultDetail(null);
+        });
     }
-  }, [activeTab, selectedResultRoomId, token]);
+  }, [activeTab, selectedResultRoomId]);
 
   if (monitoringRoomId) {
     return (
@@ -277,50 +273,38 @@ export function TeacherDashboard({
         ? { ...rmSettings, questionCount: rmSelectedQIds.length }
         : rmSettings;
     try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: rmName,
-          subject: rmSubject,
-          grade: rmGrade,
-          settings: effectiveSettings,
-          scheduledAt: rmSchedule || undefined,
-          questionIds: rmPickManual ? rmSelectedQIds : undefined,
-        }),
+      const created = await createFirebaseRoom({
+        ownerId: teacher.id,
+        teacher,
+        name: rmName,
+        subject: rmSubject,
+        grade: rmGrade,
+        settings: effectiveSettings,
+        allQuestions: questions,
+        questionIds: rmPickManual ? rmSelectedQIds : undefined,
+        scheduledAt: rmSchedule || undefined,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal membuat room.');
-        return;
-      }
       notify(
         'ok',
-        `Room berhasil dibuat! Kode: ${data.code} (${data.questionCount} soal · ${data.totalLaps ?? calcTotalLaps(data.questionCount)} putaran · ${formatScoreValue(data.pointsPerQuestion ?? calcPointsPerQuestion(data.questionCount))} poin/soal)`
+        `Room berhasil dibuat! Kode: ${created.code} (${created.questionCount} soal · ${created.totalLaps ?? calcTotalLaps(created.questionCount)} putaran · ${formatScoreValue(created.pointsPerQuestion ?? calcPointsPerQuestion(created.questionCount))} poin/soal)`
       );
       setRmName('');
       setRmSelectedQIds([]);
       await fetchAll();
       setActiveTab('rooms');
-    } catch {
-      notify('err', 'Terjadi kesalahan jaringan.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
   async function handleRoomAction(roomId: string, action: 'start' | 'close' | 'delete') {
     try {
-      const url = action === 'delete' ? `/api/rooms/${roomId}` : `/api/rooms/${roomId}/${action}`;
-      const res = await fetch(url, {
-        method: action === 'delete' ? 'DELETE' : 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Aksi room gagal.');
-        return;
+      if (action === 'start') {
+        await startFirebaseRoom(roomId);
+      } else if (action === 'close') {
+        await finishFirebaseRoom(roomId);
+      } else {
+        await deleteFirebaseRoom(roomId);
       }
       notify(
         'ok',
@@ -331,210 +315,118 @@ export function TeacherDashboard({
           : 'Room berhasil dihapus.'
       );
       await fetchAll();
-    } catch {
-      notify('err', 'Gagal memproses aksi room.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
+    }
+  }
+
+  async function handleDownloadRoomExcel(roomCode: string) {
+    if (excelDownloadBusyId) return;
+    setExcelDownloadBusyId(roomCode);
+    try {
+      await downloadRoomExcelFromFirebase(roomCode);
+      notify('ok', `Rekap Excel (.xlsx) untuk room ${roomCode} berhasil diunduh!`);
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
+    } finally {
+      setExcelDownloadBusyId(null);
     }
   }
 
   async function handleSeedStarterQuestions() {
     try {
-      const res = await fetch('/api/questions/seed-starter', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal memuat soal contoh.');
+      const { merged, added, skipped } = buildStarterQuestionItems(questions);
+      if (added === 0) {
+        notify('ok', `Semua 50 soal contoh sudah ada di Bank Soal Anda (${skipped} dilewati).`);
         return;
       }
-      notify('ok', data.message);
+      await syncQuestionBankToCloud(teacher.id, merged);
+      notify('ok', `${added} soal contoh berhasil ditambahkan ke Bank Soal (${skipped} sudah ada).`);
       await fetchAll();
-    } catch {
-      notify('err', 'Gagal memuat soal contoh.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
   async function handleCreateManualQuestion(e: React.FormEvent) {
     e.preventDefault();
     try {
-      const res = await fetch('/api/questions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          subject: newQSubject,
-          grade: newQGrade,
-          questionType: newQType,
-          prompt: newQPrompt,
-          options: newQOpts,
-          correctAnswer: newQCorrect,
-          explanation: newQExp,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal menambah soal.');
-        return;
-      }
+      const newItem: QuestionItem = {
+        id: `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        subject: newQSubject.trim() || 'Umum',
+        grade: newQGrade.trim() || 'Umum',
+        questionType: newQType,
+        prompt: newQPrompt.trim(),
+        options: newQType === 'short_answer' ? {} : newQOpts,
+        correctAnswer: newQCorrect.trim(),
+        explanation: newQExp.trim(),
+        createdAt: new Date().toISOString(),
+      };
+      const nextList = [newItem, ...questions];
+      await syncQuestionBankToCloud(teacher.id, nextList);
       notify('ok', 'Soal berhasil ditambahkan ke Bank Soal.');
       setNewQPrompt('');
       setNewQOpts({ A: '', B: '', C: '', D: '' });
       setNewQExp('');
       await fetchAll();
       setActiveTab('bank');
-    } catch {
-      notify('err', 'Gagal menyimpan soal.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
-  async function handleUpdateQuestion(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editingQ) return;
+  async function handleUpdateQuestion(updatedItem: QuestionItem) {
     try {
-      const res = await fetch(`/api/questions/${editingQ.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(editingQ),
-      });
-      if (!res.ok) {
-        notify('err', 'Gagal memperbarui soal.');
-        return;
-      }
+      const nextList = questions.map((q) => (q.id === updatedItem.id ? updatedItem : q));
+      await syncQuestionBankToCloud(teacher.id, nextList);
       notify('ok', 'Soal berhasil diperbarui.');
-      setEditingQ(null);
       await fetchAll();
-    } catch {
-      notify('err', 'Gagal memperbarui soal.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
   async function handleDeleteQuestion(id: string) {
     try {
-      const res = await fetch(`/api/questions/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        notify('err', 'Gagal menghapus soal.');
-        return;
-      }
+      const nextList = questions.filter((q) => q.id !== id);
+      await syncQuestionBankToCloud(teacher.id, nextList);
       notify('ok', 'Soal dihapus dari Bank Soal.');
       await fetchAll();
-    } catch {
-      notify('err', 'Gagal menghapus soal.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
-  async function handleWordUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setWordBusy(true);
+  async function handleBulkDeleteQuestions(idsToDelete: string[], label: string) {
+    if (idsToDelete.length === 0) return;
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/questions/import-word/preview', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal membaca dokumen Word.');
-        return;
-      }
-      const items = (data.items as WordPreviewItem[]).map((item) => ({
-        ...item,
-        selected: item.valid && !item.isDuplicate,
-      }));
-      setWordPreview(items);
-      if (items.length === 0) {
-        notify('err', 'Tidak ditemukan format SOAL 1, SOAL 2, dst di dalam dokumen Word.');
-      }
-    } catch {
-      notify('err', 'Gagal memproses file Word.');
-    } finally {
-      setWordBusy(false);
-      e.target.value = '';
-    }
-  }
-
-  async function handleCommitWordImport() {
-    if (!wordPreview) return;
-    const approved = wordPreview.filter((i) => i.selected && i.valid && !i.isDuplicate);
-    if (approved.length === 0) {
-      notify('err', 'Pilih minimal 1 soal valid yang belum duplikat.');
-      return;
-    }
-    setWordBusy(true);
-    try {
-      const res = await fetch('/api/questions/import-word/commit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          subject: wordSubject,
-          grade: wordGrade,
-          items: approved,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal menyimpan soal impor.');
-        return;
-      }
-      notify('ok', data.message);
-      setWordPreview(null);
+      const idSet = new Set(idsToDelete);
+      const nextList = questions.filter((q) => !idSet.has(q.id));
+      await syncQuestionBankToCloud(teacher.id, nextList);
+      notify('ok', `${idsToDelete.length} soal (${label}) berhasil dihapus dari Bank Soal Firebase.`);
       await fetchAll();
-      setActiveTab('bank');
-    } catch {
-      notify('err', 'Gagal menyimpan hasil impor Word.');
-    } finally {
-      setWordBusy(false);
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
   async function handleSaveSettingsAndProfile(isProfile: boolean) {
     try {
-      const res = await fetch('/api/auth/profile', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: profName,
-          schoolName: profSchool,
-          defaultSettings: defaultCfg,
-        }),
+      const updated = await updateTeacherCloudProfileFull(teacher.id, {
+        name: profName,
+        schoolName: profSchool,
+        email: teacher.email,
+        defaultSettings: defaultCfg,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        notify('err', data.error || 'Gagal menyimpan pengaturan.');
-        return;
-      }
-      onTeacherUpdated(data.teacher);
-      setRmSettings(data.teacher.defaultSettings);
+      onTeacherUpdated(updated);
+      setRmSettings(updated.defaultSettings);
       notify('ok', isProfile ? 'Profil guru berhasil diperbarui.' : 'Pengaturan game default disimpan.');
-    } catch {
-      notify('err', 'Gagal menyimpan perubahan.');
+    } catch (err) {
+      notify('err', formatFriendlyFirestoreError(err));
     }
   }
 
   const subjects = ['Semua', ...Array.from(new Set(questions.map((q) => q.subject)))];
-  const filteredQuestions = questions.filter((q) => {
-    if (qFilterSubject !== 'Semua' && q.subject !== qFilterSubject) return false;
-    if (qSearch.trim() && !q.prompt.toLowerCase().includes(qSearch.trim().toLowerCase())) {
-      return false;
-    }
-    return true;
-  });
 
   const totalParticipantsAll = rooms.reduce((acc, r) => acc + r.participantCount, 0);
   const activeRoomsCount = rooms.filter((r) => r.status === 'waiting' || r.status === 'playing').length;
@@ -1238,13 +1130,19 @@ export function TeacherDashboard({
                                 </button>
                               )}
                               {r.status === 'finished' && (
-                                <a
-                                  href={`/api/rooms/${r.id}/export-excel?token=${encodeURIComponent(token)}`}
-                                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white"
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadRoomExcel(r.code)}
+                                  disabled={excelDownloadBusyId !== null}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-xs font-semibold text-white cursor-pointer"
                                 >
-                                  <Download className="w-3.5 h-3.5" />
+                                  {excelDownloadBusyId === r.code ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Download className="w-3.5 h-3.5" />
+                                  )}
                                   <span>Excel</span>
-                                </a>
+                                </button>
                               )}
                               <button
                                 onClick={() => handleRoomAction(r.id, 'delete')}
@@ -1266,197 +1164,15 @@ export function TeacherDashboard({
 
           {/* ==================== 4. BANK SOAL ==================== */}
           {activeTab === 'bank' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-[#0F2957] border border-blue-400/25 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-3 flex-1">
-                  <div className="relative flex-1 min-w-[200px]">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={qSearch}
-                      onChange={(e) => setQSearch(e.target.value)}
-                      placeholder="Cari pertanyaan..."
-                      className="w-full pl-10 pr-4 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm text-white"
-                    />
-                  </div>
-                  <select
-                    value={qFilterSubject}
-                    onChange={(e) => setQFilterSubject(e.target.value)}
-                    className="px-3.5 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm text-white"
-                  >
-                    {subjects.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleSeedStarterQuestions}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#081226] border border-[#FACC15]/40 text-xs font-semibold text-[#FACC15] hover:bg-blue-950 cursor-pointer"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Muat 50 Soal Contoh</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('add_question')}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#FF6B1A] text-xs font-semibold text-white cursor-pointer"
-                  >
-                    <FilePlus2 className="w-3.5 h-3.5" />
-                    <span>Tambah Manual</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {filteredQuestions.map((q, idx) => (
-                  <div
-                    key={q.id}
-                    className="p-4 rounded-2xl bg-[#0F2957] border border-blue-400/20 flex flex-col sm:flex-row sm:items-start justify-between gap-4"
-                  >
-                    <div className="space-y-1.5 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-blue-200">
-                        <span className="font-mono font-bold text-[#FACC15]">#{idx + 1}</span>
-                        <span>{q.subject}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>Kelas {q.grade}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>
-                          {q.questionType === 'multiple_choice'
-                            ? 'Pilihan Ganda'
-                            : q.questionType === 'true_false'
-                            ? 'Benar/Salah'
-                            : 'Isian Singkat'}
-                        </span>
-                      </div>
-                      <p className="font-medium text-white">{q.prompt}</p>
-                      {q.questionType !== 'short_answer' && (
-                        <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-300 pt-1">
-                          {(['A', 'B', 'C', 'D'] as const)
-                            .filter((k) => Boolean(q.options[k]))
-                            .map((k) => (
-                              <div
-                                key={k}
-                                className={
-                                  q.correctAnswer === k ? 'text-emerald-300 font-semibold' : ''
-                                }
-                              >
-                                {k}. {q.options[k]}
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                      <div className="text-xs text-emerald-300 pt-1">
-                        Kunci: <strong>{q.correctAnswer}</strong>
-                        {q.explanation && (
-                          <span className="text-slate-300 font-normal"> · {q.explanation}</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={() => setEditingQ(q)}
-                        className="p-2 rounded-lg bg-[#081226] hover:bg-blue-800 text-blue-200 cursor-pointer"
-                        title="Edit Soal"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteQuestion(q.id)}
-                        className="p-2 rounded-lg bg-rose-950/70 hover:bg-rose-700 text-rose-200 cursor-pointer"
-                        title="Hapus Soal"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {editingQ && (
-                <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
-                  <form
-                    onSubmit={handleUpdateQuestion}
-                    className="w-full max-w-xl p-6 rounded-2xl bg-[#0F2957] border border-blue-400/30 space-y-4 max-h-[90vh] overflow-y-auto"
-                  >
-                    <h3 className="font-display font-bold text-lg">Edit Soal</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        value={editingQ.subject}
-                        onChange={(e) => setEditingQ({ ...editingQ, subject: e.target.value })}
-                        placeholder="Mata Pelajaran"
-                        className="px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                      />
-                      <input
-                        type="text"
-                        value={editingQ.grade}
-                        onChange={(e) => setEditingQ({ ...editingQ, grade: e.target.value })}
-                        placeholder="Kelas"
-                        className="px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                      />
-                    </div>
-                    <textarea
-                      rows={3}
-                      value={editingQ.prompt}
-                      onChange={(e) => setEditingQ({ ...editingQ, prompt: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                    />
-                    {editingQ.questionType !== 'short_answer' && (
-                      <div className="grid grid-cols-2 gap-2">
-                        {(['A', 'B', 'C', 'D'] as const).map((k) => (
-                          <input
-                            key={k}
-                            type="text"
-                            placeholder={`Opsi ${k}`}
-                            value={editingQ.options[k] || ''}
-                            onChange={(e) =>
-                              setEditingQ({
-                                ...editingQ,
-                                options: { ...editingQ.options, [k]: e.target.value },
-                              })
-                            }
-                            className="px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                          />
-                        ))}
-                      </div>
-                    )}
-                    <input
-                      type="text"
-                      value={editingQ.correctAnswer || ''}
-                      onChange={(e) => setEditingQ({ ...editingQ, correctAnswer: e.target.value })}
-                      placeholder="Kunci Jawaban"
-                      className="w-full px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                    />
-                    <textarea
-                      rows={2}
-                      value={editingQ.explanation || ''}
-                      onChange={(e) => setEditingQ({ ...editingQ, explanation: e.target.value })}
-                      placeholder="Pembahasan"
-                      className="w-full px-3 py-2 rounded-xl bg-[#081226] border border-blue-400/30 text-sm"
-                    />
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setEditingQ(null)}
-                        className="px-4 py-2 rounded-xl bg-[#081226] text-sm cursor-pointer"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-5 py-2 rounded-xl bg-[#FF6B1A] text-sm font-semibold cursor-pointer"
-                      >
-                        Simpan Perubahan
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              )}
-            </div>
+            <QuestionBankSection
+              questions={questions}
+              onSeedStarter={handleSeedStarterQuestions}
+              onUpdateQuestion={handleUpdateQuestion}
+              onDeleteQuestion={handleDeleteQuestion}
+              onBulkDeleteQuestions={handleBulkDeleteQuestions}
+              onGoToImportWord={() => setActiveTab('import_word')}
+              onGoToAddManual={() => setActiveTab('add_question')}
+            />
           )}
 
           {/* ==================== 5. TAMBAH SOAL MANUAL ==================== */}
@@ -1606,141 +1322,13 @@ export function TeacherDashboard({
 
           {/* ==================== 6. IMPOR SOAL WORD (.docx) ==================== */}
           {activeTab === 'import_word' && (
-            <div className="space-y-6">
-              <div className="p-6 rounded-2xl bg-[#0F2957] border border-blue-400/25 space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="font-display font-bold text-xl">
-                      Impor Soal dari Microsoft Word (.docx)
-                    </h2>
-                    <p className="text-sm text-blue-200/80">
-                      Unduh template resmi, isi soal Anda, unggah untuk preview validasi, lalu simpan ke Bank Soal.
-                    </p>
-                  </div>
-
-                  <a
-                    href="/api/questions/word-template"
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#1D4ED8] hover:bg-blue-600 font-semibold text-sm text-white whitespace-nowrap shrink-0"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download Template Word</span>
-                  </a>
-                </div>
-
-                <div className="p-4 rounded-xl bg-[#081226] border border-white/10 font-mono text-xs text-slate-300 whitespace-pre-wrap">
-                  {`SOAL 1\nPertanyaan: Berapakah hasil 5 x 6?\nA. 20\nB. 25\nC. 30\nD. 35\nKunci Jawaban: C\nPembahasan: 5 dikalikan 6 sama dengan 30.`}
-                </div>
-
-                <div className="grid sm:grid-cols-3 gap-4 items-end">
-                  <div>
-                    <label className="block text-xs font-semibold text-blue-200 mb-1.5">
-                      Mata Pelajaran Tujuan
-                    </label>
-                    <input
-                      type="text"
-                      value={wordSubject}
-                      onChange={(e) => setWordSubject(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#081226] border border-blue-400/30 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-blue-200 mb-1.5">
-                      Kelas Tujuan
-                    </label>
-                    <input
-                      type="text"
-                      value={wordGrade}
-                      onChange={(e) => setWordGrade(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#081226] border border-blue-400/30 text-white"
-                    />
-                  </div>
-                  <label className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF6B1A] hover:bg-[#e85d10] font-semibold text-sm text-white cursor-pointer">
-                    <Upload className="w-4 h-4" />
-                    <span>{wordBusy ? 'Membaca Dokumen...' : 'Upload Dokumen Word'}</span>
-                    <input
-                      type="file"
-                      accept=".docx"
-                      onChange={handleWordUpload}
-                      className="hidden"
-                      disabled={wordBusy}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {wordPreview && (
-                <div className="p-6 rounded-2xl bg-[#0F2957] border border-blue-400/25 space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h3 className="font-display font-bold text-lg">
-                        Preview Soal ({wordPreview.length} Terdeteksi)
-                      </h3>
-                      <p className="text-xs text-slate-300">
-                        Periksa kelengkapan soal, kunci jawaban, dan peringatan duplikat sebelum disimpan.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleCommitWordImport}
-                      disabled={wordBusy}
-                      className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm text-white cursor-pointer"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>
-                        Simpan ke Bank Soal ({wordPreview.filter((i) => i.selected).length} dipilih)
-                      </span>
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {wordPreview.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-4 rounded-xl border ${
-                          !item.valid || item.isDuplicate
-                            ? 'bg-rose-950/30 border-rose-400/40'
-                            : 'bg-[#081226] border-emerald-400/30'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <label className="flex items-start gap-3 cursor-pointer flex-1">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(item.selected)}
-                              disabled={!item.valid || item.isDuplicate}
-                              onChange={() =>
-                                setWordPreview((prev) =>
-                                  prev
-                                    ? prev.map((p, i) =>
-                                        i === idx ? { ...p, selected: !p.selected } : p
-                                      )
-                                    : null
-                                )
-                              }
-                              className="mt-1 accent-[#FF6B1A]"
-                            />
-                            <div className="space-y-1">
-                              <div className="font-mono text-xs font-bold text-[#FACC15]">
-                                SOAL {item.number} · {item.questionType}
-                              </div>
-                              <div className="font-medium text-white">{item.prompt}</div>
-                              <div className="text-xs text-slate-300">
-                                Kunci: <strong className="text-emerald-300">{item.correctAnswer || '-'}</strong>
-                                {item.explanation && ` · Pembahasan: ${item.explanation}`}
-                              </div>
-                              {item.warnings.length > 0 && (
-                                <div className="text-xs text-rose-300 font-medium pt-1">
-                                  Peringatan: {item.warnings.join(' ')}
-                                </div>
-                              )}
-                            </div>
-                          </label>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <WordImportModule
+              teacherId={teacher.id}
+              existingQuestions={questions}
+              onImported={fetchAll}
+              onNotify={notify}
+              onGoToBank={() => setActiveTab('bank')}
+            />
           )}
 
           {/* ==================== 7. HASIL PERTANDINGAN ==================== */}
@@ -1763,13 +1351,23 @@ export function TeacherDashboard({
                 </div>
 
                 {selectedResultRoomId && (
-                  <a
-                    href={`/api/rooms/${selectedResultRoomId}/export-excel?token=${encodeURIComponent(token)}`}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm text-white"
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadRoomExcel(selectedResultRoomId)}
+                    disabled={excelDownloadBusyId !== null}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 font-semibold text-sm text-white cursor-pointer"
                   >
-                    <Download className="w-4 h-4" />
-                    <span>Download Rekap Excel (.xlsx)</span>
-                  </a>
+                    {excelDownloadBusyId === selectedResultRoomId ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    <span>
+                      {excelDownloadBusyId === selectedResultRoomId
+                        ? 'Menyiapkan Excel...'
+                        : 'Download Rekap Excel (.xlsx)'}
+                    </span>
+                  </button>
                 )}
               </div>
 
@@ -1907,13 +1505,19 @@ export function TeacherDashboard({
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        <a
-                          href={`/api/rooms/${r.id}/export-excel?token=${encodeURIComponent(token)}`}
-                          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-sm text-white whitespace-nowrap"
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadRoomExcel(r.code)}
+                          disabled={excelDownloadBusyId !== null}
+                          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 font-semibold text-sm text-white whitespace-nowrap cursor-pointer"
                         >
-                          <FileSpreadsheet className="w-4 h-4" />
-                          <span>Download Excel</span>
-                        </a>
+                          {excelDownloadBusyId === r.code ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <FileSpreadsheet className="w-4 h-4" />
+                          )}
+                          <span>{excelDownloadBusyId === r.code ? 'Menyiapkan...' : 'Download Excel'}</span>
+                        </button>
                         <button
                           type="button"
                           disabled={driveExcelBusyId !== null}
@@ -1971,7 +1575,6 @@ export function TeacherDashboard({
                             }
                             const uploaded = await uploadRoomExcelToDrive(
                               accessToken,
-                              token,
                               targetRoom
                             );
                             notify(

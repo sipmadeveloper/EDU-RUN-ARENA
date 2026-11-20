@@ -35,6 +35,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidRoomCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -45,6 +49,14 @@ service cloud.firestore {
 
     function teacherProfileExists(teacherId) {
       return exists(/databases/$(database)/documents/teachers/$(teacherId));
+    }
+
+    function roomExists(roomCode) {
+      return exists(/databases/$(database)/documents/rooms/$(roomCode));
+    }
+
+    function getRoom(roomCode) {
+      return get(/databases/$(database)/documents/rooms/$(roomCode)).data;
     }
 
     // ==================== VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP) ====================
@@ -129,7 +141,7 @@ service cloud.firestore {
       && data.retentionDays is int && data.retentionDays >= 7 && data.retentionDays <= 90
       && data.defaultVenue is string && data.defaultVenue.size() >= 1 && data.defaultVenue.size() <= 20
       && (data.defaultVenue == 'stadium_day' || data.defaultVenue == 'stadium_night' || data.defaultVenue == 'open_field')
-      && data.defaultQuestionCount is int && data.defaultQuestionCount >= 5 && data.defaultQuestionCount <= 100
+      && data.defaultQuestionCount is int && data.defaultQuestionCount >= 1 && data.defaultQuestionCount <= 100
       && data.defaultMaxPlayers is int && data.defaultMaxPlayers >= 2 && data.defaultMaxPlayers <= 30
       && data.defaultTimePerQuestion is int && data.defaultTimePerQuestion >= 5 && data.defaultTimePerQuestion <= 120
       && data.createdAt is timestamp
@@ -218,6 +230,172 @@ service cloud.firestore {
       && data.standings.size() <= 30
       && (data.standings.size() == 0 || data.standings[0] is map)
       && data.createdAt is timestamp;
+    }
+
+    function isValidLiveRoom(data, roomCode) {
+      return data.keys().hasAll([
+        'roomCode',
+        'ownerId',
+        'roomName',
+        'teacherName',
+        'schoolName',
+        'subject',
+        'grade',
+        'status',
+        'settings',
+        'questionCount',
+        'totalLaps',
+        'pointsPerQuestion',
+        'questions',
+        'participantCount',
+        'countdownStartMs',
+        'startedAtMs',
+        'finishedAtMs',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'roomCode',
+        'ownerId',
+        'roomName',
+        'teacherName',
+        'schoolName',
+        'subject',
+        'grade',
+        'status',
+        'settings',
+        'questionCount',
+        'totalLaps',
+        'pointsPerQuestion',
+        'questions',
+        'participantCount',
+        'countdownStartMs',
+        'startedAtMs',
+        'finishedAtMs',
+        'createdAt',
+        'updatedAt'
+      ])
+      && isValidRoomCode(data.roomCode)
+      && data.roomCode == roomCode
+      && isValidId(data.ownerId)
+      && data.roomName is string && data.roomName.size() >= 1 && data.roomName.size() <= 100
+      && data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 100
+      && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+      && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60
+      && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 30
+      && data.status is string && data.status.size() <= 16
+      && (data.status == 'waiting' || data.status == 'countdown' || data.status == 'playing' || data.status == 'finished')
+      && data.settings is map
+      && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 50
+      && data.totalLaps is int && data.totalLaps >= 1 && data.totalLaps <= 20
+      && (data.pointsPerQuestion is int || data.pointsPerQuestion is float)
+      && data.pointsPerQuestion >= 0 && data.pointsPerQuestion <= 100
+      && data.questions is list
+      && data.questions.size() >= 1 && data.questions.size() <= 50
+      && data.questions.size() == data.questionCount
+      && data.questions[0] is map
+      && data.participantCount is int && data.participantCount >= 0 && data.participantCount <= 30
+      && data.countdownStartMs is int && data.countdownStartMs >= 0
+      && data.startedAtMs is int && data.startedAtMs >= 0
+      && data.finishedAtMs is int && data.finishedAtMs >= 0
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidRoomParticipant(data, roomCode, participantId) {
+      return data.keys().hasAll([
+        'id',
+        'roomCode',
+        'reconnectToken',
+        'name',
+        'className',
+        'avatar',
+        'lane',
+        'distance',
+        'progress',
+        'speed',
+        'effectState',
+        'effectExpiresAt',
+        'currentQuestionIndex',
+        'answeredCount',
+        'correctCount',
+        'wrongCount',
+        'unansweredCount',
+        'score',
+        'connected',
+        'startedAt',
+        'finishedAt',
+        'durationMs',
+        'finishRank',
+        'scoreRank',
+        'lastSyncMs',
+        'answers',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id',
+        'roomCode',
+        'reconnectToken',
+        'name',
+        'className',
+        'avatar',
+        'lane',
+        'distance',
+        'progress',
+        'speed',
+        'effectState',
+        'effectExpiresAt',
+        'currentQuestionIndex',
+        'answeredCount',
+        'correctCount',
+        'wrongCount',
+        'unansweredCount',
+        'score',
+        'connected',
+        'startedAt',
+        'finishedAt',
+        'durationMs',
+        'finishRank',
+        'scoreRank',
+        'lastSyncMs',
+        'answers',
+        'createdAt',
+        'updatedAt'
+      ])
+      && isValidId(data.id)
+      && data.id == participantId
+      && isValidRoomCode(data.roomCode)
+      && data.roomCode == roomCode
+      && data.reconnectToken is string && data.reconnectToken.size() >= 8 && data.reconnectToken.size() <= 64
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 40
+      && data.className is string && data.className.size() >= 1 && data.className.size() <= 24
+      && data.avatar is map
+      && data.lane is int && data.lane >= 0 && data.lane <= 29
+      && (data.distance is int || data.distance is float) && data.distance >= 0 && data.distance <= 10000
+      && (data.progress is int || data.progress is float) && data.progress >= 0 && data.progress <= 1
+      && (data.speed is int || data.speed is float) && data.speed >= 0 && data.speed <= 60
+      && data.effectState is string && data.effectState.size() <= 16
+      && (data.effectState == 'normal' || data.effectState == 'boost' || data.effectState == 'penalty' || data.effectState == 'finished')
+      && data.effectExpiresAt is int && data.effectExpiresAt >= 0
+      && data.currentQuestionIndex is int && data.currentQuestionIndex >= 0 && data.currentQuestionIndex <= 50
+      && data.answeredCount is int && data.answeredCount >= 0 && data.answeredCount <= 50
+      && data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 50
+      && data.wrongCount is int && data.wrongCount >= 0 && data.wrongCount <= 50
+      && data.unansweredCount is int && data.unansweredCount >= 0 && data.unansweredCount <= 50
+      && (data.score is int || data.score is float) && data.score >= 0 && data.score <= 100
+      && data.connected is bool
+      && data.startedAt is int && data.startedAt >= 0
+      && data.finishedAt is int && data.finishedAt >= 0
+      && data.durationMs is int && data.durationMs >= 0
+      && data.finishRank is int && data.finishRank >= 0 && data.finishRank <= 30
+      && data.scoreRank is int && data.scoreRank >= 0 && data.scoreRank <= 30
+      && data.lastSyncMs is int && data.lastSyncMs >= 0
+      && data.answers is list
+      && data.answers.size() <= 50
+      && (data.answers.size() == 0 || data.answers[0] is map)
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
     }
 
     // ==================== COLLECTION: /admins/{adminId} ====================
@@ -407,6 +585,170 @@ service cloud.firestore {
           && existing().ownerId == teacherId
           && ((isOwner(teacherId) && existing().ownerId == request.auth.uid) || isAdmin())
           && teacherProfileExists(teacherId);
+      }
+    }
+
+    // ==================== COLLECTION: /rooms/{roomCode} ====================
+    // Live serverless multiplayer rooms (zero PII).
+    // Students can look up by exact 6-char code (get), while listing and mutations require owning teacher.
+    match /rooms/{roomCode} {
+      allow get: if isValidRoomCode(roomCode);
+
+      // Pillar 8: Secure list query enforced via resource.data without get()/exists()
+      allow list: if (isVerifiedUser() && resource.data.ownerId == request.auth.uid)
+        || isBootstrapAdmin();
+
+      allow create: if isVerifiedUser()
+        && isValidRoomCode(roomCode)
+        && isValidLiveRoom(incoming(), roomCode)
+        && incoming().ownerId == request.auth.uid
+        && incoming().status == 'waiting'
+        && incoming().participantCount == 0
+        && incoming().countdownStartMs == 0
+        && incoming().startedAtMs == 0
+        && incoming().finishedAtMs == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && teacherProfileExists(request.auth.uid);
+
+      allow update: if isVerifiedUser()
+        && isValidRoomCode(roomCode)
+        && isValidLiveRoom(incoming(), roomCode)
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().roomCode == existing().roomCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && existing().status != 'finished'
+        && (
+          // Action 1: Start match countdown or transition to playing
+          (
+            (existing().status == 'waiting' || existing().status == 'countdown')
+            && (incoming().status == 'countdown' || incoming().status == 'playing')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'countdownStartMs',
+              'startedAtMs',
+              'participantCount',
+              'updatedAt'
+            ])
+          )
+          ||
+          // Action 2: Finish match (terminal transition)
+          (
+            incoming().status == 'finished'
+            && incoming().finishedAtMs > 0
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'finishedAtMs',
+              'participantCount',
+              'updatedAt'
+            ])
+          )
+          ||
+          // Action 3: Sync participant count
+          (
+            incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'participantCount',
+              'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidRoomCode(roomCode)
+        && (existing().ownerId == request.auth.uid || isAdmin());
+
+      // ==================== SUBCOLLECTION: participants ====================
+      // Students join and race via exact 6-char room code without requiring Google sign-in.
+      // Strict schema, volumetric bounds, reconnectToken immutability, and terminal lock guard every write.
+      match /participants/{participantId} {
+        allow get: if isValidRoomCode(roomCode)
+          && isValidId(participantId)
+          && roomExists(roomCode);
+
+        // Pillar 8: Zero get()/exists() in allow list; scoped to exact roomCode
+        allow list: if isValidRoomCode(roomCode)
+          && resource.data.roomCode == roomCode;
+
+        allow create: if isValidRoomCode(roomCode)
+          && isValidId(participantId)
+          && isValidRoomParticipant(incoming(), roomCode, participantId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && incoming().answeredCount == 0
+          && incoming().correctCount == 0
+          && incoming().wrongCount == 0
+          && incoming().unansweredCount == 0
+          && incoming().score == 0
+          && incoming().finishedAt == 0
+          && incoming().finishRank == 0
+          && incoming().scoreRank == 0
+          && incoming().answers.size() == 0
+          && roomExists(roomCode)
+          && getRoom(roomCode).status != 'finished';
+
+        allow update: if isValidRoomCode(roomCode)
+          && isValidId(participantId)
+          && isValidRoomParticipant(incoming(), roomCode, participantId)
+          && incoming().id == existing().id
+          && incoming().roomCode == existing().roomCode
+          && incoming().lane == existing().lane
+          && incoming().reconnectToken == existing().reconnectToken
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && roomExists(roomCode)
+          && (
+            // Tier 1: Owning teacher or Admin finalizing ranks on match finish
+            (
+              isVerifiedUser()
+              && (getRoom(roomCode).ownerId == request.auth.uid || isAdmin())
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'effectState',
+                'speed',
+                'finishedAt',
+                'durationMs',
+                'finishRank',
+                'scoreRank',
+                'lastSyncMs',
+                'updatedAt'
+              ])
+            )
+            ||
+            // Tier 2: Student updating own avatar/presence in lobby or recording answer/finish checkpoint during active race
+            (
+              getRoom(roomCode).status != 'finished'
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'avatar',
+                'distance',
+                'progress',
+                'speed',
+                'effectState',
+                'effectExpiresAt',
+                'currentQuestionIndex',
+                'answeredCount',
+                'correctCount',
+                'wrongCount',
+                'unansweredCount',
+                'score',
+                'connected',
+                'startedAt',
+                'finishedAt',
+                'durationMs',
+                'finishRank',
+                'lastSyncMs',
+                'answers',
+                'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidRoomCode(roomCode)
+          && isValidId(participantId)
+          && roomExists(roomCode)
+          && (getRoom(roomCode).ownerId == request.auth.uid || isAdmin());
       }
     }
   }

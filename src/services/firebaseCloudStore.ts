@@ -153,7 +153,7 @@ export async function ensureTeacherCloudProfile(
       maxArchivedMatches: DEFAULT_MAX_ARCHIVED_MATCHES,
       retentionDays: DEFAULT_RETENTION_DAYS,
       defaultVenue: sanitizeVenue(localTeacher?.defaultSettings?.venue),
-      defaultQuestionCount: clampInt(localTeacher?.defaultSettings?.questionCount, 5, 100, 50),
+      defaultQuestionCount: clampInt(localTeacher?.defaultSettings?.questionCount, 1, 100, 10),
       defaultMaxPlayers: clampInt(localTeacher?.defaultSettings?.maxPlayers, 2, 30, 30),
       defaultTimePerQuestion: clampInt(localTeacher?.defaultSettings?.timePerQuestion, 5, 120, 20),
       createdAt: serverTimestamp(),
@@ -188,7 +188,7 @@ export async function updateTeacherCloudRetention(
       maxArchivedMatches: clampInt(params.maxArchivedMatches, 5, 25, DEFAULT_MAX_ARCHIVED_MATCHES),
       retentionDays: clampInt(params.retentionDays, 7, 90, DEFAULT_RETENTION_DAYS),
       defaultVenue: sanitizeVenue(params.defaultSettings?.venue),
-      defaultQuestionCount: clampInt(params.defaultSettings?.questionCount, 5, 100, 50),
+      defaultQuestionCount: clampInt(params.defaultSettings?.questionCount, 1, 100, 10),
       defaultMaxPlayers: clampInt(params.defaultSettings?.maxPlayers, 2, 30, 30),
       defaultTimePerQuestion: clampInt(params.defaultSettings?.timePerQuestion, 5, 120, 20),
       updatedAt: serverTimestamp(),
@@ -213,6 +213,128 @@ export async function updateTeacherCloudIdentity(
       schoolName: clampStr(schoolName, 120, 'Sekolah Nusantara'),
       updatedAt: serverTimestamp(),
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+interface LocalExtraRoomSettings {
+  baseSpeed: number;
+  boostDuration: number;
+  penaltyDuration: number;
+  allowShortAnswer: boolean;
+}
+
+const DEFAULT_LOCAL_EXTRA: LocalExtraRoomSettings = {
+  baseSpeed: 3,
+  boostDuration: 15,
+  penaltyDuration: 30,
+  allowShortAnswer: false,
+};
+
+function readLocalExtraSettings(uid: string): LocalExtraRoomSettings {
+  try {
+    const raw = localStorage.getItem(`edurun_teacher_extra_settings_${sanitizeDocId(uid)}`);
+    if (!raw) return DEFAULT_LOCAL_EXTRA;
+    const parsed = JSON.parse(raw) as Partial<LocalExtraRoomSettings>;
+    return {
+      baseSpeed: Number.isFinite(Number(parsed.baseSpeed))
+        ? Math.max(1.5, Math.min(15, Number(parsed.baseSpeed)))
+        : DEFAULT_LOCAL_EXTRA.baseSpeed,
+      boostDuration: clampInt(parsed.boostDuration, 3, 60, DEFAULT_LOCAL_EXTRA.boostDuration),
+      penaltyDuration: clampInt(parsed.penaltyDuration, 5, 60, DEFAULT_LOCAL_EXTRA.penaltyDuration),
+      allowShortAnswer: Boolean(parsed.allowShortAnswer),
+    };
+  } catch {
+    return DEFAULT_LOCAL_EXTRA;
+  }
+}
+
+function saveLocalExtraSettings(uid: string, settings: RoomSettings): void {
+  try {
+    const payload: LocalExtraRoomSettings = {
+      baseSpeed: Number.isFinite(Number(settings.baseSpeed))
+        ? Math.max(1.5, Math.min(15, Number(settings.baseSpeed)))
+        : DEFAULT_LOCAL_EXTRA.baseSpeed,
+      boostDuration: clampInt(settings.boostDuration, 3, 60, DEFAULT_LOCAL_EXTRA.boostDuration),
+      penaltyDuration: clampInt(settings.penaltyDuration, 5, 60, DEFAULT_LOCAL_EXTRA.penaltyDuration),
+      allowShortAnswer: Boolean(settings.allowShortAnswer),
+    };
+    localStorage.setItem(`edurun_teacher_extra_settings_${sanitizeDocId(uid)}`, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+export function cloudProfileToTeacherProfile(
+  uid: string,
+  cloud: TeacherCloudProfileDoc
+): TeacherProfile {
+  const cleanUid = sanitizeDocId(uid);
+  const extra = readLocalExtraSettings(cleanUid);
+  return {
+    id: cleanUid,
+    name: clampStr(cloud.name, 100, 'Guru EduRun'),
+    email: clampStr(cloud.email, 160, 'guru@edurun.id'),
+    schoolName: clampStr(cloud.schoolName, 120, 'Sekolah Nusantara'),
+    defaultSettings: {
+      questionCount: clampInt(cloud.defaultQuestionCount, 1, 50, 10),
+      maxPlayers: clampInt(cloud.defaultMaxPlayers, 2, 30, 30),
+      timePerQuestion: clampInt(cloud.defaultTimePerQuestion, 5, 120, 20),
+      baseSpeed: extra.baseSpeed,
+      boostDuration: extra.boostDuration,
+      penaltyDuration: extra.penaltyDuration,
+      allowShortAnswer: extra.allowShortAnswer,
+      venue: sanitizeVenue(cloud.defaultVenue),
+    },
+  };
+}
+
+export async function updateTeacherCloudProfileFull(
+  uid: string,
+  params: {
+    name: string;
+    schoolName: string;
+    email: string;
+    defaultSettings: RoomSettings;
+  }
+): Promise<TeacherProfile> {
+  const cleanUid = sanitizeDocId(uid);
+  const path = `teachers/${cleanUid}`;
+  const ref = doc(db, 'teachers', cleanUid);
+
+  const safeName = clampStr(params.name, 100, 'Guru EduRun');
+  const safeSchool = clampStr(params.schoolName, 120, 'Sekolah Nusantara');
+  const safeVenue = sanitizeVenue(params.defaultSettings.venue);
+  const safeQCount = clampInt(params.defaultSettings.questionCount, 1, 50, 10);
+  const safeMaxPlayers = clampInt(params.defaultSettings.maxPlayers, 2, 30, 30);
+  const safeTime = clampInt(params.defaultSettings.timePerQuestion, 5, 120, 20);
+
+  try {
+    await updateDoc(ref, {
+      name: safeName,
+      schoolName: safeSchool,
+      defaultVenue: safeVenue,
+      defaultQuestionCount: safeQCount,
+      defaultMaxPlayers: safeMaxPlayers,
+      defaultTimePerQuestion: safeTime,
+      updatedAt: serverTimestamp(),
+    });
+    saveLocalExtraSettings(cleanUid, params.defaultSettings);
+
+    return {
+      id: cleanUid,
+      name: safeName,
+      email: clampStr(params.email, 160, 'guru@edurun.id'),
+      schoolName: safeSchool,
+      defaultSettings: {
+        ...params.defaultSettings,
+        venue: safeVenue,
+        questionCount: safeQCount,
+        maxPlayers: safeMaxPlayers,
+        timePerQuestion: safeTime,
+      },
+    };
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

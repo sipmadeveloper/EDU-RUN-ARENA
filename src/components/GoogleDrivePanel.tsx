@@ -31,6 +31,8 @@ import {
   type DriveFileItem,
   type DriveFolderInfo,
 } from '../services/googleDriveService';
+import { syncQuestionBankToCloud } from '../services/firebaseCloudStore';
+import { mergeQuestionsDeduplicated } from '../services/starterQuestions';
 import type { QuestionItem, RoomSummary, TeacherProfile } from '../types/game';
 
 interface GoogleDrivePanelProps {
@@ -71,7 +73,6 @@ function formatModified(iso: string): string {
 }
 
 export function GoogleDrivePanel({
-  token,
   teacher,
   questions,
   rooms,
@@ -197,22 +198,23 @@ export function GoogleDrivePanel({
         onNotify('err', `File "${file.name}" tidak berisi soal yang valid.`);
         return;
       }
-      const res = await fetch('/api/questions/restore-bulk', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ questions: driveQuestions }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Gagal memulihkan soal ke server.');
-      }
+      const incoming: QuestionItem[] = driveQuestions.map((q) => ({
+        id: q.id,
+        subject: q.subject,
+        grade: q.grade,
+        questionType: q.questionType,
+        prompt: q.prompt,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation,
+        createdAt: new Date().toISOString(),
+      }));
+      const { merged, added, skipped } = mergeQuestionsDeduplicated(questions, incoming);
+      await syncQuestionBankToCloud(teacher.id, merged);
       await onQuestionsRestored();
       onNotify(
         'ok',
-        `Berhasil memulihkan ${data.restored} soal dari Google Drive (${file.name}).`
+        `Berhasil memulihkan ${added} soal baru dari Google Drive (${file.name}${skipped > 0 ? `, ${skipped} duplikat dilewati` : ''}).`
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal memulihkan Bank Soal dari Drive.';
@@ -243,7 +245,6 @@ export function GoogleDrivePanel({
         try {
           const uploaded = await uploadRoomExcelToDrive(
             driveToken,
-            token,
             selectedRoom,
             existingExcel?.id
           );

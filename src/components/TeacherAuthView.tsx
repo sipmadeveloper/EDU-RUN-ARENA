@@ -2,13 +2,19 @@ import { useState } from 'react';
 import { ArrowLeft, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { AppLogo } from './AppLogo';
 import { formatFriendlyFirestoreError, signInWithGoogleAccount } from '../firebase';
-import { ensureTeacherCloudProfile, loadQuestionBankFromCloud } from '../services/firebaseCloudStore';
+import {
+  cloudProfileToTeacherProfile,
+  ensureTeacherCloudProfile,
+  loadQuestionBankFromCloud,
+  syncQuestionBankToCloud,
+} from '../services/firebaseCloudStore';
 import {
   BANK_SOAL_FILENAME,
   downloadQuestionBankFromDrive,
   listEduRunDriveFilesReadOnly,
 } from '../services/googleDriveService';
-import type { TeacherProfile } from '../types/game';
+import { buildStarterQuestionItems } from '../services/starterQuestions';
+import type { QuestionItem, TeacherProfile } from '../types/game';
 
 interface TeacherAuthViewProps {
   onBack: () => void;
@@ -31,59 +37,35 @@ export function TeacherAuthView({ onBack, onAuthenticated }: TeacherAuthViewProp
 
       const cloudProfile = await ensureTeacherCloudProfile(user, null);
 
-      const res = await fetch('/api/auth/firebase-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firebaseUid: user.uid,
-          email: user.email,
-          name: cloudProfile.name || user.displayName || user.email.split('@')[0],
-          schoolName: cloudProfile.schoolName || 'Sekolah Nusantara',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal menyambungkan sesi server.');
-        return;
-      }
-
-      // Automatically restore saved cloud/Drive questions (read-only) if available
-      let restoredCount = 0;
+      // Check Firestore Bank Soal; if empty, check Google Drive backup; if still empty, auto-seed 50 starter questions
+      let existingCount = 0;
       try {
         const cloudBank = await loadQuestionBankFromCloud(user.uid);
-        if (cloudBank.questions.length > 0) {
-          await fetch('/api/questions/restore-bulk', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${data.token}`,
-            },
-            body: JSON.stringify({ questions: cloudBank.questions }),
-          });
-          restoredCount = cloudBank.questions.length;
-        }
+        existingCount = cloudBank.questions.length;
       } catch {
-        // Non-blocking restore; teacher can also restore manually in Cloud Firebase tab
+        // Non-blocking check
       }
 
-      // Read-only Google Drive connection verification immediately after Google Sign-In
-      if (accessToken) {
+      if (existingCount === 0 && accessToken) {
         try {
           const driveCheck = await listEduRunDriveFilesReadOnly(accessToken);
-          if (restoredCount === 0) {
-            const driveBankFile = driveCheck.files.find((f) => f.name === BANK_SOAL_FILENAME);
-            if (driveBankFile) {
-              const driveQuestions = await downloadQuestionBankFromDrive(accessToken, driveBankFile.id);
-              if (driveQuestions.length > 0) {
-                await fetch('/api/questions/restore-bulk', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${data.token}`,
-                  },
-                  body: JSON.stringify({ questions: driveQuestions }),
-                });
-              }
+          const driveBankFile = driveCheck.files.find((f) => f.name === BANK_SOAL_FILENAME);
+          if (driveBankFile) {
+            const driveQuestions = await downloadQuestionBankFromDrive(accessToken, driveBankFile.id);
+            if (driveQuestions.length > 0) {
+              const items: QuestionItem[] = driveQuestions.map((q) => ({
+                id: q.id,
+                subject: q.subject,
+                grade: q.grade,
+                questionType: q.questionType,
+                prompt: q.prompt,
+                options: q.options,
+                correctAnswer: q.correctAnswer,
+                explanation: q.explanation,
+                createdAt: new Date().toISOString(),
+              }));
+              await syncQuestionBankToCloud(user.uid, items);
+              existingCount = items.length;
             }
           }
         } catch {
@@ -91,8 +73,17 @@ export function TeacherAuthView({ onBack, onAuthenticated }: TeacherAuthViewProp
         }
       }
 
-      localStorage.setItem('edurun_teacher_token', data.token);
-      onAuthenticated(data.token, data.teacher);
+      if (existingCount === 0) {
+        try {
+          const { merged } = buildStarterQuestionItems([]);
+          await syncQuestionBankToCloud(user.uid, merged);
+        } catch {
+          // Non-blocking; teacher can also seed starter questions manually in Bank Soal tab
+        }
+      }
+
+      const teacherProfile = cloudProfileToTeacherProfile(user.uid, cloudProfile);
+      onAuthenticated(user.uid, teacherProfile);
     } catch (err) {
       setError(formatFriendlyFirestoreError(err));
     } finally {

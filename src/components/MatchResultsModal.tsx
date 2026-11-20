@@ -9,6 +9,8 @@ import {
   calcTotalLaps,
   formatScoreValue,
 } from '../utils/matchScaling';
+import { getFirebaseRoomResults } from '../services/firebaseRaceService';
+import { formatFriendlyFirestoreError } from '../firebase';
 
 interface MatchResultsModalProps {
   roomCode: string;
@@ -69,17 +71,10 @@ export function MatchResultsModal({
     setReviewLoading(true);
     setReviewError('');
     try {
-      const res = await fetch(
-        `/api/public/rooms/${encodeURIComponent(roomCode)}/results/${encodeURIComponent(localPlayerId)}`
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        setReviewError(data.error || 'Pembahasan belum tersedia.');
-      } else {
-        setReviewItems(data.review);
-      }
-    } catch {
-      setReviewError('Gagal memuat pembahasan soal.');
+      const data = await getFirebaseRoomResults(roomCode, localPlayerId);
+      setReviewItems(data.review);
+    } catch (err) {
+      setReviewError(formatFriendlyFirestoreError(err));
     } finally {
       setReviewLoading(false);
     }

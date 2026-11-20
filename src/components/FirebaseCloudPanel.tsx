@@ -51,7 +51,11 @@ import {
 } from '../services/firebaseCloudStore';
 import { AdminFirebasePanel } from './AdminFirebasePanel';
 import { GoogleDrivePanel } from './GoogleDrivePanel';
-import type { PlayerState, QuestionItem, RoomSummary, TeacherProfile } from '../types/game';
+import {
+  deleteFinishedTeacherRooms,
+  getFirebaseRoomResults,
+} from '../services/firebaseRaceService';
+import type { QuestionItem, RoomSummary, TeacherProfile } from '../types/game';
 
 interface FirebaseCloudPanelProps {
   token: string;
@@ -213,22 +217,10 @@ export function FirebaseCloudPanel({
         onNotify('err', 'Belum ada paket soal tersimpan di Firebase Cloud.');
         return;
       }
-      const res = await fetch('/api/questions/restore-bulk', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ questions: cloud.questions }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Gagal memulihkan soal ke server.');
-      }
       await onQuestionsRestored();
       onNotify(
         'ok',
-        `Pulih dari Firebase Cloud: ${data.added} soal baru ditambahkan (${data.skipped} sudah ada).`
+        `Bank Soal disegarkan langsung dari Firebase Cloud (${cloud.questions.length} soal aktif).`
       );
     } catch (err) {
       const msg = formatFriendlyFirestoreError(err);
@@ -255,22 +247,7 @@ export function FirebaseCloudPanel({
       let totalPruned = 0;
 
       for (const rm of finishedRooms) {
-        const res = await fetch(`/api/rooms/${rm.id}/results`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) continue;
-        const detail = (await res.json()) as {
-          room: {
-            id: string;
-            code: string;
-            name: string;
-            subject: string;
-            grade: string;
-            questionCount: number;
-            totalLaps?: number;
-          };
-          byScore: PlayerState[];
-        };
+        const detail = await getFirebaseRoomResults(rm.code);
         const out = await archiveMatchSummaryToCloud(
           fbUser.uid,
           {
@@ -495,24 +472,19 @@ export function FirebaseCloudPanel({
   }
 
   function requestDeleteAllFinishedLocalRooms() {
-    if (finishedCount === 0) return;
+    if (!fbUser || finishedCount === 0) return;
     setConfirmDialog({
-      title: `Hapus ${finishedCount} Room Selesai dari Server?`,
-      description: `Semua ${finishedCount} room berstatus selesai di server aplikasi akan dihapus beserta log jawaban peserta agar server tetap ringan.`,
+      title: `Hapus ${finishedCount} Room Selesai di Firebase?`,
+      description: `Semua ${finishedCount} room berstatus selesai beserta data peserta akan dihapus permanen agar penyimpanan Firestore tetap lega.`,
       confirmLabel: `Hapus ${finishedCount} Room Selesai`,
       onConfirm: async () => {
         setBusyAction('del-local-rooms');
         try {
-          const res = await fetch('/api/rooms/bulk/finished', {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Gagal menghapus room selesai.');
+          const deleted = await deleteFinishedTeacherRooms(fbUser.uid);
           await onQuestionsRestored();
-          onNotify('ok', `${data.deleted} room selesai berhasil dibersihkan dari server.`);
+          onNotify('ok', `${deleted} room selesai berhasil dibersihkan dari Firebase.`);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Gagal menghapus room selesai.';
+          const msg = formatFriendlyFirestoreError(err);
           onNotify('err', msg);
         } finally {
           setBusyAction(null);
@@ -637,10 +609,10 @@ export function FirebaseCloudPanel({
         <div className="p-4 rounded-2xl bg-[#0F2957] border border-emerald-400/30">
           <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs uppercase mb-1.5">
             <ShieldCheck className="w-4 h-4" />
-            <span>0 Write Saat Balapan</span>
+            <span>100% Serverless &amp; Hemat Write</span>
           </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Animasi lari 20 FPS, posisi lintasan, dan hitung mundur diproses di RAM + WebSocket. Firestore tidak pernah dibombardir saat lomba berlangsung.
+            Gerakan lari 60 FPS dihitung lokal (dead-reckoning) di perangkat siswa. Firestore hanya menulis saat siswa menjawab soal — sangat hemat untuk kuota gratis!
           </p>
         </div>
 
@@ -779,7 +751,7 @@ export function FirebaseCloudPanel({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#081226] hover:bg-amber-900/60 disabled:opacity-40 border border-amber-400/35 text-xs font-semibold text-amber-200 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Hapus Room Selesai di Server ({finishedCount})</span>
+                  <span>Hapus Room Selesai ({finishedCount})</span>
                 </button>
 
                 <button
@@ -1069,31 +1041,27 @@ export function FirebaseCloudPanel({
         </>
       )}
 
-      {/* GitHub Deployment Guide */}
+      {/* GitHub + Vercel + Firebase Deployment Guide */}
       <div className="p-5 rounded-2xl bg-[#081226] border border-blue-400/30 space-y-3">
         <div className="flex items-center gap-2 font-display font-bold text-base text-[#FACC15]">
           <GitBranch className="w-4 h-4" />
-          <span>Checklist Deploy via GitHub (Cloud Run / Render / Railway)</span>
+          <span>Checklist Deploy Gratis via GitHub + Vercel + Firebase</span>
         </div>
         <ol className="list-decimal list-inside space-y-1.5 text-xs sm:text-sm text-slate-200 leading-relaxed">
           <li>
-            Push repositori ke GitHub (file <code className="text-cyan-300">.env</code> dan folder lokal{' '}
-            <code className="text-cyan-300">data/</code> sudah otomatis diabaikan oleh <code className="text-cyan-300">.gitignore</code>).
+            Push kode ke GitHub (aplikasi kini <strong>100% Serverless</strong> — tidak butuh server Node.js/Docker berbayar dan tanpa kartu kredit).
           </li>
           <li>
-            Hubungkan repositori GitHub ke layanan hosting Node.js + WebSocket (misalnya <strong>Google Cloud Run</strong>, <strong>Render</strong>, atau <strong>Railway</strong>).
+            Buka <strong>vercel.com</strong> (bisa dari HP), login dengan GitHub, klik <strong>Add New &rarr; Project</strong> lalu pilih repositori <strong>EDU-RUN-ARENA</strong>.
           </li>
           <li>
-            Atur Build Command: <code className="text-[#FACC15]">npm install &amp;&amp; npm run build</code> dan Start Command:{' '}
-            <code className="text-[#FACC15]">NODE_ENV=production npx tsx server.ts</code>.
+            Framework Preset otomatis terdeteksi <strong>Vite</strong> (Build Command <code className="text-[#FACC15]">npm run build</code>, Output <code className="text-[#FACC15]">dist</code>) lalu langsung klik <strong>Deploy</strong>.
           </li>
           <li>
-            Tambahkan Environment Variables di dashboard hosting:{' '}
-            <code className="text-emerald-300">NODE_ENV=production</code> dan{' '}
-            <code className="text-emerald-300">JWT_SECRET</code> (teks acak bebas untuk sesi guru — <strong>tanpa perlu API Key AI apa pun!</strong>).
+            Salin link <code className="text-emerald-300">nama-proyek.vercel.app</code>, lalu tambahkan ke <strong>Firebase Console &rarr; Authentication &rarr; Settings &rarr; Authorized domains</strong> agar Login Google guru langsung aktif.
           </li>
           <li>
-            Tambahkan domain produksi Anda ke <strong>Firebase Console &rarr; Authentication &rarr; Settings &rarr; Authorized domains</strong>.
+            Tambahkan juga link <code className="text-cyan-300">https://nama-proyek.vercel.app</code> pada <strong>Google Cloud Console &rarr; Credentials &rarr; OAuth 2.0 Client &rarr; Authorized JavaScript origins</strong> untuk fitur Google Drive.
           </li>
         </ol>
       </div>

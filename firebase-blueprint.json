@@ -46,7 +46,7 @@
         },
         "defaultQuestionCount": {
           "type": "integer",
-          "description": "Default number of questions per race (5 to 100)."
+          "description": "Default number of questions per race (1 to 100)."
         },
         "defaultMaxPlayers": {
           "type": "integer",
@@ -312,6 +312,293 @@
         "updatedBy",
         "updatedAt"
       ]
+    },
+    "LiveRaceRoom": {
+      "title": "Serverless Live Race Room",
+      "description": "100% Firestore-powered multiplayer race room keyed by 6-character uppercase room code. Zero PII; publicly lookup-able by exact code for student join, strictly teacher-owned for management.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$",
+          "description": "Unique 6-character uppercase join code matching the document ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the teacher who created the room."
+        },
+        "roomName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Match title displayed on stadium jumbotron and lobby."
+        },
+        "teacherName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Teacher display name (non-PII)."
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "School name for Excel report header."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Subject name."
+        },
+        "grade": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30,
+          "description": "Target grade/class."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["waiting", "countdown", "playing", "finished"],
+          "description": "Match lifecycle state."
+        },
+        "settings": {
+          "type": "object",
+          "description": "Race configuration map (questionCount, maxPlayers, timePerQuestion, baseSpeed, boostDuration, penaltyDuration, allowShortAnswer, venue, scheduledAt)."
+        },
+        "questionCount": {
+          "type": "integer",
+          "description": "Number of questions in this room (1 to 50)."
+        },
+        "totalLaps": {
+          "type": "integer",
+          "description": "Computed track laps (1 to 20)."
+        },
+        "pointsPerQuestion": {
+          "type": "number",
+          "description": "Scaled points per question summing to max 100."
+        },
+        "questions": {
+          "type": "array",
+          "description": "Bounded array of 1 to 50 compact question objects for this match."
+        },
+        "participantCount": {
+          "type": "integer",
+          "description": "Cached participant count (0 to 30)."
+        },
+        "countdownStartMs": {
+          "type": "integer",
+          "description": "Epoch ms when 5-second countdown began (0 if not started)."
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "description": "Epoch ms when runners start moving (0 if not started)."
+        },
+        "finishedAtMs": {
+          "type": "integer",
+          "description": "Epoch ms when the match finished (0 if not finished)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the room was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest room update."
+        }
+      },
+      "required": [
+        "roomCode",
+        "ownerId",
+        "roomName",
+        "teacherName",
+        "schoolName",
+        "subject",
+        "grade",
+        "status",
+        "settings",
+        "questionCount",
+        "totalLaps",
+        "pointsPerQuestion",
+        "questions",
+        "participantCount",
+        "countdownStartMs",
+        "startedAtMs",
+        "finishedAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LiveRoomParticipant": {
+      "title": "Live Race Participant",
+      "description": "Student participant checkpoint inside /rooms/{roomCode}/participants/{participantId}. Updated only on join, answer submission, and finish for ultra-low Firebase Spark quota usage.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Participant document ID."
+        },
+        "roomCode": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$",
+          "description": "Parent room 6-char code."
+        },
+        "reconnectToken": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "description": "Client reconnect secret token (immutable)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Student display name."
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Student class label."
+        },
+        "avatar": {
+          "type": "object",
+          "description": "3D avatar configuration map."
+        },
+        "lane": {
+          "type": "integer",
+          "description": "Assigned track lane (0 to 29, immutable)."
+        },
+        "distance": {
+          "type": "number",
+          "description": "Last synced distance in meters along track."
+        },
+        "progress": {
+          "type": "number",
+          "description": "Last synced normalized progress (0 to 1)."
+        },
+        "speed": {
+          "type": "number",
+          "description": "Last synced speed in m/s."
+        },
+        "effectState": {
+          "type": "string",
+          "enum": ["normal", "boost", "penalty", "finished"],
+          "description": "Current speed effect state."
+        },
+        "effectExpiresAt": {
+          "type": "integer",
+          "description": "Epoch ms when current boost/penalty expires."
+        },
+        "currentQuestionIndex": {
+          "type": "integer",
+          "description": "Zero-based index of the next unanswered question (0 to 50)."
+        },
+        "answeredCount": {
+          "type": "integer",
+          "description": "Total questions answered or timed out (0 to 50)."
+        },
+        "correctCount": {
+          "type": "integer",
+          "description": "Total correct answers (0 to 50)."
+        },
+        "wrongCount": {
+          "type": "integer",
+          "description": "Total wrong answers (0 to 50)."
+        },
+        "unansweredCount": {
+          "type": "integer",
+          "description": "Total timed-out/unanswered questions (0 to 50)."
+        },
+        "score": {
+          "type": "number",
+          "description": "Current total score (0 to 100)."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Whether the student session is active."
+        },
+        "startedAt": {
+          "type": "integer",
+          "description": "Epoch ms when student began running (0 if waiting)."
+        },
+        "finishedAt": {
+          "type": "integer",
+          "description": "Epoch ms when student crossed finish line (0 if running)."
+        },
+        "durationMs": {
+          "type": "integer",
+          "description": "Total race duration in ms (0 if unfinished)."
+        },
+        "finishRank": {
+          "type": "integer",
+          "description": "Finish order rank (0 if unfinished, 1..30 when finished)."
+        },
+        "scoreRank": {
+          "type": "integer",
+          "description": "Final score rank (0 if unfinished, 1..30 when finalized)."
+        },
+        "lastSyncMs": {
+          "type": "integer",
+          "description": "Epoch ms timestamp of last physics checkpoint for client dead-reckoning."
+        },
+        "answers": {
+          "type": "array",
+          "description": "Bounded array of up to 50 compact answer records for post-match review & Excel export."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when student joined (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest participant checkpoint."
+        }
+      },
+      "required": [
+        "id",
+        "roomCode",
+        "reconnectToken",
+        "name",
+        "className",
+        "avatar",
+        "lane",
+        "distance",
+        "progress",
+        "speed",
+        "effectState",
+        "effectExpiresAt",
+        "currentQuestionIndex",
+        "answeredCount",
+        "correctCount",
+        "wrongCount",
+        "unansweredCount",
+        "score",
+        "connected",
+        "startedAt",
+        "finishedAt",
+        "durationMs",
+        "finishRank",
+        "scoreRank",
+        "lastSyncMs",
+        "answers",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -344,6 +631,18 @@
         "$ref": "#/entities/MatchArchive"
       },
       "description": "Compact 1-doc-per-match finished summaries (auto-pruned by maxArchivedMatches & retentionDays; cleanable by verified admin)."
+    },
+    "/rooms/{roomCode}": {
+      "schema": {
+        "$ref": "#/entities/LiveRaceRoom"
+      },
+      "description": "Live multiplayer race rooms keyed by 6-char uppercase room code. Lookup-able by exact code for student join, listable/writable only by owning teacher or verified admin."
+    },
+    "/rooms/{roomCode}/participants/{participantId}": {
+      "schema": {
+        "$ref": "#/entities/LiveRoomParticipant"
+      },
+      "description": "Live race participants inside a room. Updated only on join, answer submission, and finish so 60 FPS races stay ultra-lightweight on Firebase Spark Free Tier."
     }
   }
 }
