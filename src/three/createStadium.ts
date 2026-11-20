@@ -37,6 +37,9 @@ export interface PodiumTarget {
   y: number;
   z: number;
   stepZ: number;
+  sideEntryX: number;
+  sideStairTopX: number;
+  sideDir: -1 | 1;
 }
 
 export interface PodiumWinnerSummary {
@@ -2002,10 +2005,10 @@ export function createStadium(
   group.add(podiumGroup);
 
   const podiumTargets: PodiumTarget[] = [
-    { rank: 2, x: -4.2, y: 2.05, z: 0.0, stepZ: 2.85 },
-    { rank: 1, x: -1.2, y: 2.95, z: 0.0, stepZ: 2.85 },
-    { rank: 3, x: 1.8, y: 1.5, z: 0.0, stepZ: 2.85 },
-    { rank: 4, x: 4.8, y: 1.0, z: 0.0, stepZ: 2.85 },
+    { rank: 2, x: -4.2, y: 1.06, z: 0.0, stepZ: 2.2, sideEntryX: -9.85, sideStairTopX: -5.5, sideDir: -1 },
+    { rank: 1, x: -1.2, y: 1.38, z: 0.0, stepZ: 2.2, sideEntryX: -9.85, sideStairTopX: -5.5, sideDir: -1 },
+    { rank: 3, x: 1.8, y: 0.82, z: 0.0, stepZ: 2.2, sideEntryX: 10.45, sideStairTopX: 6.1, sideDir: 1 },
+    { rank: 4, x: 4.8, y: 0.62, z: 0.0, stepZ: 2.2, sideEntryX: 10.45, sideStairTopX: 6.1, sideDir: 1 },
   ];
 
   const carpetGeo = new THREE.BoxGeometry(11.6, 0.05, 13.6);
@@ -2029,22 +2032,153 @@ export function createStadium(
   trimR.position.set(0.3 + 5.9, 0.045, 10.0);
   podiumGroup.add(trimL, trimR);
 
-  const daisGeo = new THREE.BoxGeometry(16.6, 0.26, 7.6);
+  // Widened championship dais supporting both left and right side staircases cleanly
+  const daisGeo = new THREE.BoxGeometry(18.6, 0.26, 7.6);
   const daisMat = new THREE.MeshStandardMaterial({ color: 0x0b1730, roughness: 0.5, metalness: 0.35 });
   const daisMesh = new THREE.Mesh(daisGeo, daisMat);
   daisMesh.position.set(0.3, 0.13, -0.4);
   daisMesh.receiveShadow = true;
-  const daisEdgeGeo = new THREE.BoxGeometry(16.75, 0.1, 0.18);
+  const daisEdgeGeo = new THREE.BoxGeometry(18.75, 0.1, 0.18);
   const daisEdge = new THREE.Mesh(daisEdgeGeo, goldTrimMat);
   daisEdge.position.set(0.3, 0.24, 3.35);
   podiumGroup.add(daisMesh, daisEdge);
 
-  const stairGeo1 = new THREE.BoxGeometry(12.2, 0.14, 0.9);
-  const stairMesh1 = new THREE.Mesh(stairGeo1, daisMat);
-  stairMesh1.position.set(0.3, 0.07, 3.85);
-  podiumGroup.add(stairMesh1);
+  // Side access steps from ground (y=0) onto the dais (y=0.26) on BOTH left and right flanks
+  const sideDaisStepGeo = new THREE.BoxGeometry(0.95, 0.14, 2.35);
+  const sideDaisCarpetGeo = new THREE.BoxGeometry(0.96, 0.03, 2.15);
+  const sideDaisNoseGeo = new THREE.BoxGeometry(0.08, 0.04, 2.38);
 
-  disposables.push(carpetGeo, carpetMat, carpetTrimGeo, goldTrimMat, daisGeo, daisMat, daisEdgeGeo, stairGeo1);
+  for (const side of [-1, 1] as const) {
+    const stepX = side === -1 ? -9.47 : 10.07;
+    const outerEdgeX = side === -1 ? stepX - 0.45 : stepX + 0.45;
+    const baseStep = new THREE.Mesh(sideDaisStepGeo, daisMat);
+    baseStep.position.set(stepX, 0.07, 0.0);
+    baseStep.receiveShadow = true;
+    const tread = new THREE.Mesh(sideDaisCarpetGeo, carpetMat);
+    tread.position.set(stepX, 0.15, 0.0);
+    const nose = new THREE.Mesh(sideDaisNoseGeo, goldTrimMat);
+    nose.position.set(outerEdgeX, 0.145, 0.0);
+    podiumGroup.add(baseStep, tread, nose);
+  }
+
+  // Helper to build a grand royal side staircase climbing along +/-X with red carpet treads, gold nosing & handrails
+  const buildSideStairFlight = (opts: {
+    startX: number;
+    endX: number;
+    startY: number;
+    endY: number;
+    steps: number;
+    depthZ: number;
+    zCenter: number;
+  }) => {
+    const { startX, endX, startY, endY, steps, depthZ, zCenter } = opts;
+    const totalRun = endX - startX;
+    const stepRun = Math.abs(totalRun) / steps;
+    const dir = Math.sign(totalRun) || 1;
+    const totalRise = endY - startY;
+
+    for (let s = 0; s < steps; s++) {
+      const frac = (s + 1) / steps;
+      const stepTopY = startY + totalRise * frac;
+      const stepH = stepTopY - startY;
+      const cx = startX + dir * (s + 0.5) * stepRun;
+      const outerEdgeX = cx - dir * (stepRun / 2 - 0.03);
+
+      const riserGeo = new THREE.BoxGeometry(stepRun + 0.02, stepH, depthZ);
+      const riserMesh = new THREE.Mesh(riserGeo, daisMat);
+      riserMesh.position.set(cx, startY + stepH / 2, zCenter);
+      riserMesh.castShadow = true;
+      riserMesh.receiveShadow = true;
+
+      const treadGeo = new THREE.BoxGeometry(stepRun + 0.03, 0.035, depthZ - 0.14);
+      const treadMesh = new THREE.Mesh(treadGeo, carpetMat);
+      treadMesh.position.set(cx, stepTopY + 0.015, zCenter);
+
+      const noseGeo = new THREE.BoxGeometry(0.065, 0.045, depthZ + 0.02);
+      const noseMesh = new THREE.Mesh(noseGeo, goldTrimMat);
+      noseMesh.position.set(outerEdgeX, stepTopY + 0.015, zCenter);
+
+      podiumGroup.add(riserMesh, treadMesh, noseMesh);
+      disposables.push(riserGeo, treadGeo, noseGeo);
+    }
+
+    // Brushed-gold ceremonial handrails flanking front & rear sides of the side staircase
+    const railLen = Math.hypot(totalRun, totalRise) + 0.16;
+    const railAngle = Math.atan2(totalRise, totalRun);
+    const railBarGeo = new THREE.CylinderGeometry(0.042, 0.042, railLen, 8);
+    const postGeo = new THREE.CylinderGeometry(0.038, 0.045, 0.85, 8);
+    const midX = (startX + endX) / 2;
+    const midY = (startY + endY) / 2 + 0.82;
+    disposables.push(railBarGeo, postGeo);
+
+    for (const zSide of [-1, 1] as const) {
+      const railZ = zCenter + zSide * (depthZ / 2 - 0.04);
+      const rail = new THREE.Mesh(railBarGeo, goldTrimMat);
+      rail.position.set(midX, midY, railZ);
+      rail.rotation.z = railAngle - Math.PI / 2;
+
+      const startPost = new THREE.Mesh(postGeo, goldTrimMat);
+      startPost.position.set(startX + dir * 0.12, startY + 0.42, railZ);
+
+      const endPost = new THREE.Mesh(postGeo, goldTrimMat);
+      endPost.position.set(endX - dir * 0.12, endY + 0.4, railZ);
+
+      podiumGroup.add(rail, startPost, endPost);
+    }
+  };
+
+  // Left side staircase climbing from dais (-8.75) up into Rank 2 (-5.50, y=1.06)
+  buildSideStairFlight({
+    startX: -8.75,
+    endX: -5.5,
+    startY: 0.26,
+    endY: 1.06,
+    steps: 4,
+    depthZ: 2.05,
+    zCenter: 0.0,
+  });
+
+  // Right side staircase climbing from dais (+9.35) up into Rank 4 (+6.10, y=0.62)
+  buildSideStairFlight({
+    startX: 9.35,
+    endX: 6.1,
+    startY: 0.26,
+    endY: 0.62,
+    steps: 3,
+    depthZ: 2.05,
+    zCenter: 0.0,
+  });
+
+  // Connecting side transition steps between adjacent podium blocks so winners step smoothly up from the sides
+  const sideBridgeSpecs: Array<{ x: number; topY: number; widthX: number; depthZ: number; z: number }> = [
+    { x: -2.7, topY: 1.22, widthX: 0.44, depthZ: 1.95, z: -0.1 }, // Rank 2 -> Rank 1
+    { x: 3.3, topY: 0.72, widthX: 0.44, depthZ: 1.95, z: -0.1 }, // Rank 4 -> Rank 3
+    { x: 0.3, topY: 1.1, widthX: 0.44, depthZ: 1.95, z: -0.1 }, // Rank 3 -> Rank 1
+  ];
+  for (const bridge of sideBridgeSpecs) {
+    const h = bridge.topY - 0.26;
+    const bGeo = new THREE.BoxGeometry(bridge.widthX, h, bridge.depthZ);
+    const bMesh = new THREE.Mesh(bGeo, daisMat);
+    bMesh.position.set(bridge.x, 0.26 + h / 2, bridge.z);
+    const bTreadGeo = new THREE.BoxGeometry(bridge.widthX + 0.02, 0.035, bridge.depthZ - 0.08);
+    const bTread = new THREE.Mesh(bTreadGeo, carpetMat);
+    bTread.position.set(bridge.x, bridge.topY + 0.015, bridge.z);
+    podiumGroup.add(bMesh, bTread);
+    disposables.push(bGeo, bTreadGeo);
+  }
+
+  disposables.push(
+    carpetGeo,
+    carpetMat,
+    carpetTrimGeo,
+    goldTrimMat,
+    daisGeo,
+    daisMat,
+    daisEdgeGeo,
+    sideDaisStepGeo,
+    sideDaisCarpetGeo,
+    sideDaisNoseGeo
+  );
 
   const rankColors: Record<1 | 2 | 3 | 4, { body: number; rim: number; hex: string; label: string }> = {
     1: { body: 0x1e3a8a, rim: 0xfacc15, hex: '#FACC15', label: 'JUARA 1' },
@@ -2095,7 +2229,7 @@ export function createStadium(
     pedMesh.castShadow = true;
     pedMesh.receiveShadow = true;
 
-    const capGeo = new THREE.BoxGeometry(2.74, 0.14, 2.84);
+    const capGeo = new THREE.BoxGeometry(2.74, 0.12, 2.84);
     const capMat = new THREE.MeshStandardMaterial({
       color: spec.rim,
       roughness: 0.22,
@@ -2104,26 +2238,16 @@ export function createStadium(
       emissiveIntensity: pt.rank === 1 ? 0.28 : 0.14,
     });
     const capMesh = new THREE.Mesh(capGeo, capMat);
-    capMesh.position.set(pt.x, pt.y - 0.07, pt.z);
+    capMesh.position.set(pt.x, pt.y - 0.06, pt.z);
 
-    const stepCount = Math.max(1, Math.round(bodyHeight / 0.45));
-    const stepFrontGeo = new THREE.BoxGeometry(2.0, 0.22, 0.42);
-    disposables.push(stepFrontGeo);
-    for (let sIdx = 0; sIdx < stepCount; sIdx++) {
-      const frac = (sIdx + 1) / (stepCount + 1);
-      const stepY = 0.26 + bodyHeight * frac;
-      const stepZ = 1.35 + (stepCount - sIdx) * 0.32;
-      const stepMesh = new THREE.Mesh(stepFrontGeo, capMat);
-      stepMesh.position.set(pt.x, stepY - 0.11, stepZ);
-      podiumGroup.add(stepMesh);
-    }
-
+    // Unobstructed front rank plaque (stairs are now exclusively on the left & right sides)
     const plaqueTex = createRankPlaqueTexture(pt.rank);
-    const plaqueSize = Math.min(1.5, Math.max(0.65, bodyHeight * 0.78));
-    const plaqueGeo = new THREE.PlaneGeometry(plaqueSize, plaqueSize);
+    const plaqueH = Math.min(0.95, Math.max(0.32, bodyHeight * 0.8));
+    const plaqueW = Math.min(1.35, plaqueH * 1.15);
+    const plaqueGeo = new THREE.PlaneGeometry(plaqueW, plaqueH);
     const plaqueMat = new THREE.MeshBasicMaterial({ map: plaqueTex });
     const plaque = new THREE.Mesh(plaqueGeo, plaqueMat);
-    plaque.position.set(pt.x, 0.26 + bodyHeight * 0.5, pt.z + 1.37);
+    plaque.position.set(pt.x, 0.26 + bodyHeight * 0.48, pt.z + 1.37);
 
     podiumGroup.add(pedMesh, capMesh, plaque);
     disposables.push(pedGeo, pedMat, capGeo, capMat, plaqueTex, plaqueGeo, plaqueMat);

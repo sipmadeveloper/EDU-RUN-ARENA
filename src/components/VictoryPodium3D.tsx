@@ -139,10 +139,10 @@ export function VictoryPodium3D({
   const spotlightEntries = useMemo<SpotlightEntry[]>(() => {
     const entries: SpotlightEntry[] = [];
     const baseSlots = [
-      { idx: 0, rank: 1, x: 0, height: 1.78, z: 0 },
-      { idx: 1, rank: 2, x: -2.35, height: 1.24, z: 0.1 },
-      { idx: 2, rank: 3, x: 2.35, height: 0.9, z: 0.1 },
-      ...(hasFourth ? [{ idx: 3, rank: 4, x: 4.45, height: 0.62, z: 0.35 }] : []),
+      { idx: 0, rank: 1, x: 0, height: 0.96, z: 0 },
+      { idx: 1, rank: 2, x: -2.35, height: 0.68, z: 0.05 },
+      { idx: 2, rank: 3, x: 2.35, height: 0.48, z: 0.05 },
+      ...(hasFourth ? [{ idx: 3, rank: 4, x: 4.45, height: 0.32, z: 0.08 }] : []),
     ];
 
     for (const slot of baseSlots) {
@@ -171,9 +171,9 @@ export function VictoryPodium3D({
         label: `#${localRank}`,
         playerName: localPlayer.name,
         isLocal: true,
-        x: -4.25,
-        y: 0.38,
-        z: 1.05,
+        x: -5.55,
+        y: 0.24,
+        z: 1.55,
         animMode: meta.animMode,
         accentHex: meta.accentHex,
       });
@@ -272,20 +272,20 @@ export function VictoryPodium3D({
     scene.add(floor);
     disposables.push(turfTex, floorGeo, floorMat);
 
-    // Championship stage platform ring under the podium
+    // Championship stage platform ring under the podium (widened cleanly for left & right side staircases)
     const STAGE_TOP_Y = 0.16;
-    const stageGeo = new THREE.CylinderGeometry(7.2, 7.5, STAGE_TOP_Y, 48);
+    const stageGeo = new THREE.CylinderGeometry(8.35, 8.65, STAGE_TOP_Y, 48);
     const stageMat = new THREE.MeshStandardMaterial({
       color: 0x0f2552,
       roughness: 0.45,
       metalness: 0.35,
     });
     const stageMesh = new THREE.Mesh(stageGeo, stageMat);
-    stageMesh.position.set(wideCenterX, STAGE_TOP_Y / 2, 0.65);
+    stageMesh.position.set(wideCenterX, STAGE_TOP_Y / 2, 0.55);
     stageMesh.receiveShadow = true;
     scene.add(stageMesh);
 
-    const trimRingGeo = new THREE.TorusGeometry(7.25, 0.06, 8, 56);
+    const trimRingGeo = new THREE.TorusGeometry(8.4, 0.06, 8, 56);
     const trimRingMat = new THREE.MeshStandardMaterial({
       color: 0xfacc15,
       roughness: 0.22,
@@ -295,7 +295,7 @@ export function VictoryPodium3D({
     });
     const trimRing = new THREE.Mesh(trimRingGeo, trimRingMat);
     trimRing.rotation.x = Math.PI / 2;
-    trimRing.position.set(wideCenterX, STAGE_TOP_Y + 0.01, 0.65);
+    trimRing.position.set(wideCenterX, STAGE_TOP_Y + 0.01, 0.55);
     scene.add(trimRing);
 
     // Royal red carpet VIP walkway in front of podiums for the medal presenter
@@ -402,36 +402,8 @@ export function VictoryPodium3D({
       const topY = pedH + 0.21;
       const frontEdgeZ = entry.z + pedD / 2;
 
-      // For Top 3 medalists, add solid royal red-carpeted front ceremonial stairs so the presenter stands grounded
+      // Grounded front red-carpet presenter target for Top-3 medalists (podium stairs are on the sides!)
       if (entry.rank === 1 || entry.rank === 2 || entry.rank === 3) {
-        const standTopY = Math.max(STAGE_TOP_Y + 0.22, topY - 0.34);
-        const stepCount = entry.rank === 1 ? 4 : entry.rank === 2 ? 3 : 2;
-        const stepWidth = 1.18;
-        const topLandingDepth = 0.68;
-        const riseTotal = standTopY - STAGE_TOP_Y;
-
-        for (let s = 0; s < stepCount; s++) {
-          const frac = (s + 1) / stepCount;
-          const h = riseTotal * frac;
-          const stepDepth = s === stepCount - 1 ? topLandingDepth : 0.34;
-          const zBack = frontEdgeZ + (stepCount - 1 - s) * 0.32;
-          const zCenter = zBack + stepDepth / 2;
-
-          const sGeo = new THREE.BoxGeometry(stepWidth, h, stepDepth);
-          const sMesh = new THREE.Mesh(sGeo, carpetMat);
-          sMesh.position.set(entry.x, STAGE_TOP_Y + h / 2, zCenter);
-          sMesh.castShadow = !isSoftwareGl;
-          sMesh.receiveShadow = true;
-          scene.add(sMesh);
-
-          const noseGeo = new THREE.BoxGeometry(stepWidth + 0.04, 0.035, 0.055);
-          const noseMesh = new THREE.Mesh(noseGeo, goldTrimMat);
-          noseMesh.position.set(entry.x, STAGE_TOP_Y + h + 0.005, zCenter + stepDepth / 2 - 0.01);
-          scene.add(noseMesh);
-
-          disposables.push(sGeo, noseGeo);
-        }
-
         ceremonyTargets.push({
           rank: entry.rank,
           name: player.name,
@@ -439,24 +411,19 @@ export function VictoryPodium3D({
           runnerY: topY,
           runnerZ: entry.z,
           standX: entry.x,
-          standY: standTopY,
-          standZ: frontEdgeZ + topLandingDepth * 0.52,
+          standY: STAGE_TOP_Y,
+          standZ: frontEdgeZ + 0.58,
         });
       }
 
-      // Crisp rank number plaque mounted clearly on the pedestal front/upper face
+      // Crisp unobstructed rank number plaque centered prominently on the pedestal front face
       const plaqueTex = createRankPlaqueTexture(`#${entry.rank}`, style.plaqueBg, style.plaqueFg);
-      const plaqueW = entry.rank <= 3 ? 0.62 : Math.min(1.15, pedW * 0.62);
-      const plaqueH = entry.rank <= 3 ? 0.34 : Math.min(0.56, Math.max(0.28, pedH * 0.52));
+      const plaqueW = Math.min(1.18, pedW * 0.64);
+      const plaqueH = Math.min(0.56, Math.max(0.24, pedH * 0.64));
       const plaqueGeo = new THREE.PlaneGeometry(plaqueW, plaqueH);
       const plaqueMat = new THREE.MeshBasicMaterial({ map: plaqueTex });
       const plaque = new THREE.Mesh(plaqueGeo, plaqueMat);
-      if (entry.rank <= 3) {
-        // Place cleanly at upper-front face above the ceremonial steps
-        plaque.position.set(entry.x, topY - 0.22, frontEdgeZ + 0.022);
-      } else {
-        plaque.position.set(entry.x, Math.max(0.32, pedH * 0.56 + 0.12), frontEdgeZ + 0.015);
-      }
+      plaque.position.set(entry.x, STAGE_TOP_Y + pedH * 0.5, frontEdgeZ + 0.018);
       scene.add(plaque);
 
       // Soft spotlight beam above 1st place and local player
@@ -507,6 +474,118 @@ export function VictoryPodium3D({
         focusZ: entry.z,
         celebrateStartAt: medalTier ? null : 0,
       });
+    }
+
+    // Grand royal side staircases flanking LEFT and RIGHT sides of the championship podium
+    const stairRiserMat = new THREE.MeshStandardMaterial({
+      color: 0x0b1730,
+      roughness: 0.48,
+      metalness: 0.36,
+    });
+    disposables.push(stairRiserMat);
+
+    const buildPodiumSideStairs = (opts: {
+      startX: number;
+      endX: number;
+      topY: number;
+      steps: number;
+      depthZ: number;
+      zCenter: number;
+    }) => {
+      const { startX, endX, topY, steps, depthZ, zCenter } = opts;
+      const totalRun = endX - startX;
+      const stepRun = Math.abs(totalRun) / steps;
+      const dir = Math.sign(totalRun) || 1;
+      const totalRise = topY - STAGE_TOP_Y;
+
+      for (let s = 0; s < steps; s++) {
+        const frac = (s + 1) / steps;
+        const h = totalRise * frac;
+        const stepTop = STAGE_TOP_Y + h;
+        const cx = startX + dir * (s + 0.5) * stepRun;
+        const outerEdgeX = cx - dir * (stepRun / 2 - 0.02);
+
+        const sGeo = new THREE.BoxGeometry(stepRun + 0.02, h, depthZ);
+        const sMesh = new THREE.Mesh(sGeo, stairRiserMat);
+        sMesh.position.set(cx, STAGE_TOP_Y + h / 2, zCenter);
+        sMesh.castShadow = !isSoftwareGl;
+        sMesh.receiveShadow = true;
+
+        const tGeo = new THREE.BoxGeometry(stepRun + 0.03, 0.03, depthZ - 0.12);
+        const tMesh = new THREE.Mesh(tGeo, carpetMat);
+        tMesh.position.set(cx, stepTop + 0.012, zCenter);
+
+        const nGeo = new THREE.BoxGeometry(0.05, 0.036, depthZ + 0.02);
+        const nMesh = new THREE.Mesh(nGeo, goldTrimMat);
+        nMesh.position.set(outerEdgeX, stepTop + 0.012, zCenter);
+
+        scene.add(sMesh, tMesh, nMesh);
+        disposables.push(sGeo, tGeo, nGeo);
+      }
+
+      // Brushed-gold side handrails along front & rear borders of the side stairs
+      const railLen = Math.hypot(totalRun, totalRise) + 0.12;
+      const railAngle = Math.atan2(totalRise, totalRun);
+      const railGeo = new THREE.CylinderGeometry(0.032, 0.032, railLen, 8);
+      const postGeo = new THREE.CylinderGeometry(0.03, 0.036, 0.68, 8);
+      const midX = (startX + endX) / 2;
+      const midY = (STAGE_TOP_Y + topY) / 2 + 0.65;
+      disposables.push(railGeo, postGeo);
+
+      for (const zSide of [-1, 1] as const) {
+        const railZ = zCenter + zSide * (depthZ / 2 - 0.03);
+        const rail = new THREE.Mesh(railGeo, goldTrimMat);
+        rail.position.set(midX, midY, railZ);
+        rail.rotation.z = railAngle - Math.PI / 2;
+
+        const pStart = new THREE.Mesh(postGeo, goldTrimMat);
+        pStart.position.set(startX + dir * 0.1, STAGE_TOP_Y + 0.34, railZ);
+
+        const pEnd = new THREE.Mesh(postGeo, goldTrimMat);
+        pEnd.position.set(endX - dir * 0.1, topY + 0.32, railZ);
+
+        scene.add(rail, pStart, pEnd);
+      }
+    };
+
+    const hasRank2 = spotlightEntries.some((e) => e.rank === 2);
+    const hasRank3 = spotlightEntries.some((e) => e.rank === 3);
+
+    // Left staircase climbing from left flank into Rank 2 (or Rank 1 if solo)
+    buildPodiumSideStairs({
+      startX: hasRank2 ? -4.95 : -2.65,
+      endX: hasRank2 ? -3.28 : -1.05,
+      topY: hasRank2 ? 0.89 : 1.17,
+      steps: 4,
+      depthZ: 1.32,
+      zCenter: 0.05,
+    });
+
+    // Right staircase climbing from right flank into Rank 4 / Rank 3 / Rank 1
+    buildPodiumSideStairs({
+      startX: hasFourth ? 6.72 : hasRank3 ? 4.82 : 2.65,
+      endX: hasFourth ? 5.38 : hasRank3 ? 3.28 : 1.05,
+      topY: hasFourth ? 0.53 : hasRank3 ? 0.69 : 1.17,
+      steps: hasFourth ? 3 : 4,
+      depthZ: 1.32,
+      zCenter: 0.05,
+    });
+
+    // Side connecting step bridges between adjacent podium blocks
+    const bridgeSpecs: Array<{ x: number; w: number; topY: number }> = [];
+    if (hasRank2) bridgeSpecs.push({ x: -1.24, w: 0.38, topY: 1.03 });
+    if (hasRank3) bridgeSpecs.push({ x: 1.24, w: 0.38, topY: 0.93 });
+    if (hasFourth) bridgeSpecs.push({ x: 3.4, w: 0.28, topY: 0.61 });
+    for (const b of bridgeSpecs) {
+      const h = b.topY - STAGE_TOP_Y;
+      const bGeo = new THREE.BoxGeometry(b.w, h, 1.3);
+      const bMesh = new THREE.Mesh(bGeo, stairRiserMat);
+      bMesh.position.set(b.x, STAGE_TOP_Y + h / 2, 0.03);
+      const btGeo = new THREE.BoxGeometry(b.w + 0.02, 0.03, 1.2);
+      const btMesh = new THREE.Mesh(btGeo, carpetMat);
+      btMesh.position.set(b.x, b.topY + 0.012, 0.03);
+      scene.add(bMesh, btMesh);
+      disposables.push(bGeo, btGeo);
     }
 
     // Formal VIP Medal Presenter wearing tailored dark suit jacket, crisp white formal shirt & tie, and black trousers
@@ -730,8 +809,8 @@ export function VictoryPodium3D({
           animateBlockyRunner(item.rig, animElapsed, 'idle', item.phaseOffset, dt);
           item.rig.trophyGroup.visible = false;
           if (ceremonyStage.bowingRank === item.rank && ceremonyStage.bowAmount > 0.005) {
-            item.rig.headGroup.rotation.x += ceremonyStage.bowAmount * 0.44;
-            item.rig.bodyPivot.rotation.x += ceremonyStage.bowAmount * 0.12;
+            item.rig.headGroup.rotation.x += ceremonyStage.bowAmount * 0.54;
+            item.rig.bodyPivot.rotation.x += ceremonyStage.bowAmount * 0.22;
           }
         }
       }

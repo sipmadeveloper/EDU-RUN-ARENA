@@ -461,8 +461,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               runnerY: pt.y,
               runnerZ: pt.z,
               standX: pt.x,
-              standY: Math.max(STADIUM_CARPET_Y + 0.24, pt.y - 0.34),
-              standZ: 1.42,
+              standY: STADIUM_CARPET_Y,
+              standZ: 1.92,
             });
           }
         }
@@ -570,20 +570,22 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           }
 
           if (pt) {
-            // Walk up red carpet -> climb podium steps -> turn forward -> wait & bow for medal -> celebrate wearing medal!
+            // Walk to assigned side staircase -> climb sideways up the steps -> turn forward -> receive medal & celebrate!
             const tStart = 0.45 + (4 - rank) * 0.25;
-            const walkDur = 1.65;
-            const climbDur = 0.95;
+            const walkDur = 1.25;
+            const climbDur = 1.35;
             const turnDur = 0.42;
 
-            const startX = pt.x * 1.12;
-            const startZ = 15.2 + (rank - 1) * 0.35;
+            const startX = pt.sideEntryX + pt.sideDir * 3.0;
+            const startZ = 5.4 + (rank - 1) * 0.45;
+            const approachYaw = Math.atan2(pt.sideEntryX - startX, pt.z - startZ);
+            const climbYaw = pt.sideDir === -1 ? Math.PI / 2 : -Math.PI / 2;
             const localT = Math.max(0, ceremonyElapsed - tStart);
 
             let rx = startX;
             let ry = 0;
             let rz = startZ;
-            let rYaw = Math.PI;
+            let rYaw = approachYaw;
 
             const isMedalist = rank <= 3;
             const hasMedal = !isMedalist || stadiumAwardedRanks.has(rank);
@@ -594,18 +596,29 @@ export const StadiumArena3D = memo(function StadiumArena3D({
 
             if (localT < walkDur) {
               const u = THREE.MathUtils.smoothstep(localT / walkDur, 0, 1);
-              rx = THREE.MathUtils.lerp(startX, pt.x, u);
+              rx = THREE.MathUtils.lerp(startX, pt.sideEntryX, u);
               ry = 0;
-              rz = THREE.MathUtils.lerp(startZ, pt.stepZ, u);
-              rYaw = Math.PI;
+              rz = THREE.MathUtils.lerp(startZ, pt.z, u);
+              rYaw = u < 0.82 ? approachYaw : THREE.MathUtils.lerp(approachYaw, climbYaw, (u - 0.82) / 0.18);
               animMode = localT > 0.02 ? 'normal' : 'idle';
               hideTrophyUntilGoldMedal = isMedalist && !hasMedal;
             } else if (localT < walkDur + climbDur) {
               const u = THREE.MathUtils.smoothstep((localT - walkDur) / climbDur, 0, 1);
-              rx = pt.x;
-              ry = THREE.MathUtils.lerp(0, pt.y, u);
-              rz = THREE.MathUtils.lerp(pt.stepZ, pt.z, u);
-              rYaw = Math.PI;
+              rx = THREE.MathUtils.lerp(pt.sideEntryX, pt.x, u);
+              // Climb up the side staircase first, then step onto target tier
+              const stairSpan = Math.max(0.01, Math.abs(pt.sideStairTopX - pt.sideEntryX));
+              const totalSpan = Math.max(stairSpan, Math.abs(pt.x - pt.sideEntryX));
+              const stairEndU = Math.min(1, stairSpan / totalSpan);
+              const sideTopY = pt.sideDir === -1 ? 1.06 : 0.62;
+              if (u <= stairEndU) {
+                const su = THREE.MathUtils.clamp(u / Math.max(0.01, stairEndU), 0, 1);
+                ry = THREE.MathUtils.lerp(0, Math.min(pt.y, sideTopY), su);
+              } else {
+                const tu = THREE.MathUtils.clamp((u - stairEndU) / Math.max(0.01, 1 - stairEndU), 0, 1);
+                ry = THREE.MathUtils.lerp(Math.min(pt.y, sideTopY), pt.y, tu);
+              }
+              rz = pt.z;
+              rYaw = climbYaw;
               animMode = 'normal';
               hideTrophyUntilGoldMedal = isMedalist && !hasMedal;
             } else if (localT < walkDur + climbDur + turnDur) {
@@ -613,7 +626,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               rx = pt.x;
               ry = pt.y;
               rz = pt.z;
-              rYaw = THREE.MathUtils.lerp(Math.PI, 0, u);
+              rYaw = THREE.MathUtils.lerp(climbYaw, 0, u);
               animMode = hasMedal ? getVictoryAnimModeForRank(rank) : 'idle';
               animTime = Math.max(0, localT - (walkDur + climbDur));
               animPhase = 0;
@@ -692,8 +705,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           entry.rig.trophyGroup.visible = false;
         }
         if (ceremonyBowAmount > 0.005) {
-          entry.rig.headGroup.rotation.x += ceremonyBowAmount * 0.44;
-          entry.rig.bodyPivot.rotation.x += ceremonyBowAmount * 0.12;
+          entry.rig.headGroup.rotation.x += ceremonyBowAmount * 0.54;
+          entry.rig.bodyPivot.rotation.x += ceremonyBowAmount * 0.22;
         }
 
         if (p.id === localIdRef.current) {
