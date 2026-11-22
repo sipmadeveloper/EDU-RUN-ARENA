@@ -668,8 +668,7 @@ export function createStadium(
   const stadiumGroup = new THREE.Group();
   const nightExtrasGroup = new THREE.Group();
   const openFieldGroup = new THREE.Group();
-  const dayCloudsGroup = new THREE.Group();
-  group.add(stadiumGroup, nightExtrasGroup, openFieldGroup, dayCloudsGroup);
+  group.add(stadiumGroup, nightExtrasGroup, openFieldGroup);
 
   function fillRoundRect(
     ctx: CanvasRenderingContext2D,
@@ -1922,28 +1921,7 @@ export function createStadium(
     openFieldGroup.add(hill);
   }
 
-  // ==================== D. FLUFFY DAYTIME CLOUDS ====================
-  const cloudGeo = new THREE.BoxGeometry(40, 11, 22);
-  const cloudSubGeo = new THREE.BoxGeometry(24, 9, 18);
-  const cloudMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: venue === 'stadium_night' ? 0 : 0.92,
-    depthWrite: false,
-  });
-  disposables.push(cloudGeo, cloudSubGeo, cloudMat);
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    const r = 490 + (i % 3) * 105;
-    const cx = Math.cos(a) * r;
-    const cy = 140 + (i % 4) * 20;
-    const cz = Math.sin(a) * r * 0.85;
-    const c1 = new THREE.Mesh(cloudGeo, cloudMat);
-    c1.position.set(cx, cy, cz);
-    const c2 = new THREE.Mesh(cloudSubGeo, cloudMat);
-    c2.position.set(cx + 15, cy + 5, cz + 2);
-    dayCloudsGroup.add(c1, c2);
-  }
+  // Clouds intentionally removed for a crisp, clear sky vista.
 
   // ==================== COMPLETE HEAD-TO-TOE ANIMATED SPECTATORS ====================
   const specUniforms = {
@@ -2377,10 +2355,6 @@ export function createStadium(
     moonMat.opacity = nightVis;
     starMat.opacity = nightVis;
     nightExtrasGroup.visible = nightVis > 0.01;
-
-    const daySkyVis = THREE.MathUtils.clamp(1 - w.night, 0, 1);
-    cloudMat.opacity = 0.92 * daySkyVis;
-    dayCloudsGroup.visible = daySkyVis > 0.01;
   }
 
   applyThemeWeights(weightsForVenue(venue));
@@ -3081,7 +3055,6 @@ export function createStadium(
     group,
     stadiumGroup,
     openFieldGroup,
-    dayCloudsGroup,
     nightExtrasGroup,
     podiumGroup,
     flameGroup,
@@ -3104,9 +3077,6 @@ export function createStadium(
       specUniforms.uCheer.value = THREE.MathUtils.lerp(specUniforms.uCheer.value, cheering ? 1 : 0, 0.08);
       if (stadiumGroup.visible) {
         exteriorGrounds.update(elapsed);
-      }
-      if (dayCloudsGroup.visible) {
-        dayCloudsGroup.rotation.y = elapsed * 0.012;
       }
       // Gentle Olympic torch cauldron flame dance
       const flicker = 1 + Math.sin(elapsed * 9.5) * 0.08 + Math.cos(elapsed * 15.2) * 0.05;

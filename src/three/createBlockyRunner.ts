@@ -1656,23 +1656,25 @@ export function createBlockyRunner(
   nose.position.set(0, 0.32, isBoxyBot ? 0.365 : 0.348);
   headGroup.add(nose);
 
-  // --- ORGANIC SCULPTED HAIR SILHOUETTES ---
+  // --- ORGANIC SCULPTED HAIR SILHOUETTES (Hairline & bangs strictly above eyebrows so eyes are always clear) ---
   const hairStyle = preset ? preset.hairStyle : avatar.gender === 'female' ? 'ponytail' : 'short';
-  const addHairDome = (scaleY = 1.0, offsetY = 0.36) => {
+  const addHairDome = (scaleY = 1.0, offsetY = 0.37) => {
     const dome = new THREE.Mesh(SHARED_HAIR_DOME, hairMat);
     dome.scale.set(1.01, scaleY, 1.0);
-    dome.position.set(0, offsetY, -0.01);
+    // Tilt backward cleanly onto the crown & back of head so the front rim sits high on the forehead above eyebrows
+    dome.position.set(0, offsetY + 0.06, -0.045);
+    dome.rotation.x = -0.44;
     headGroup.add(dome);
   };
 
   if (hairStyle === 'short') {
     addHairDome(0.98, 0.37);
-    // Dynamic soft athletic front hair sweeps
+    // Dynamic swept-up athletic front hair tufts kept cleanly at the upper hairline
     for (let i = -2; i <= 2; i++) {
       const tuft = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
-      tuft.scale.set(0.42, 0.24, 0.42);
-      tuft.position.set(i * 0.1, 0.62 - Math.abs(i) * 0.02, 0.26 - Math.abs(i) * 0.03);
-      tuft.rotation.set(1.05, 0, -i * 0.22);
+      tuft.scale.set(0.36, 0.2, 0.34);
+      tuft.position.set(i * 0.1, 0.69 - Math.abs(i) * 0.015, 0.19 - Math.abs(i) * 0.03);
+      tuft.rotation.set(0.45, 0, -i * 0.26);
       headGroup.add(tuft);
     }
   } else if (hairStyle === 'ponytail') {
@@ -1697,9 +1699,9 @@ export function createBlockyRunner(
     addHairDome(1.02, 0.37);
     for (let i = -2; i <= 2; i++) {
       const spike = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
-      spike.scale.set(0.46, 0.36, 0.52);
-      spike.position.set(i * 0.12, 0.72 - Math.abs(i) * 0.03, 0.16 - Math.abs(i) * 0.05);
-      spike.rotation.set(0.58, 0, -i * 0.26);
+      spike.scale.set(0.42, 0.34, 0.46);
+      spike.position.set(i * 0.12, 0.75 - Math.abs(i) * 0.025, 0.12 - Math.abs(i) * 0.04);
+      spike.rotation.set(0.32, 0, -i * 0.28);
       headGroup.add(spike);
     }
     const backSpikeL = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
@@ -1733,12 +1735,12 @@ export function createBlockyRunner(
       backStrand.position.set(i * 0.18, 0.18, -0.32 + Math.abs(i) * 0.04);
       headGroup.add(backStrand);
     }
-    // Soft swept front bangs
-    for (let i = -1; i <= 1; i++) {
+    // Neat side-parted curtain bangs framed high at the upper forehead (never covering eyebrows or eyes!)
+    for (const side of [-1, 1] as const) {
       const bang = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
-      bang.scale.set(0.55, 0.24, 0.36);
-      bang.position.set(i * 0.14, 0.59, 0.28 - Math.abs(i) * 0.03);
-      bang.rotation.set(1.25, 0, -i * 0.25);
+      bang.scale.set(0.42, 0.2, 0.28);
+      bang.position.set(side * 0.19, 0.67, 0.21);
+      bang.rotation.set(0.42, 0, -side * 0.58);
       headGroup.add(bang);
     }
   } else if (hairStyle === 'parted_brown' || hairStyle === 'bacon') {
@@ -1747,10 +1749,11 @@ export function createBlockyRunner(
       const sideSweep = new THREE.Mesh(SHARED_CAPSULE, hairMat);
       sideSweep.scale.set(0.15, 0.3, 0.22);
       sideSweep.position.set(side * 0.33, 0.38, -0.05);
+      // High side-parted hair sweep sitting cleanly above forehead & temples
       const bang = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
-      bang.scale.set(0.54, 0.28, 0.36);
-      bang.position.set(side * 0.16, 0.6, 0.28);
-      bang.rotation.set(1.1, 0, -side * 0.48);
+      bang.scale.set(0.44, 0.22, 0.28);
+      bang.position.set(side * 0.18, 0.68, 0.21);
+      bang.rotation.set(0.44, 0, -side * 0.58);
       headGroup.add(sideSweep, bang);
     }
   } else if (hairStyle === 'green_mohawk') {
@@ -1758,24 +1761,25 @@ export function createBlockyRunner(
       const u = i / 4;
       const fin = new THREE.Mesh(SHARED_HAIR_STRAND, hairMat);
       fin.scale.set(0.34, 0.38 - Math.abs(u - 0.5) * 0.12, 0.46);
-      fin.position.set(0, 0.74 - Math.abs(u - 0.5) * 0.1, 0.24 - u * 0.52);
-      fin.rotation.x = 0.28 - u * 0.6;
+      fin.position.set(0, 0.75 - Math.abs(u - 0.5) * 0.1, 0.19 - u * 0.52);
+      fin.rotation.x = 0.22 - u * 0.6;
       headGroup.add(fin);
     }
   } else if (hairStyle === 'fluffy_under_cap' || hairStyle === 'messy_black' || hairStyle === 'fluffy_brown') {
     addHairDome(1.02, 0.37);
+    // Elevated fluffy crown tufts kept strictly at the upper forehead hairline so eyes stay 100% open
     const puffOffsets: Array<[number, number, number, number]> = [
-      [-0.22, 0.62, 0.2, 0.13],
-      [0, 0.65, 0.24, 0.14],
-      [0.22, 0.62, 0.2, 0.13],
-      [-0.32, 0.5, 0.04, 0.12],
-      [0.32, 0.5, 0.04, 0.12],
-      [-0.18, 0.68, -0.1, 0.14],
-      [0.18, 0.68, -0.1, 0.14],
+      [-0.22, 0.69, 0.14, 0.115],
+      [0, 0.73, 0.16, 0.12],
+      [0.22, 0.69, 0.14, 0.115],
+      [-0.32, 0.53, 0.0, 0.115],
+      [0.32, 0.53, 0.0, 0.115],
+      [-0.18, 0.71, -0.12, 0.135],
+      [0.18, 0.71, -0.12, 0.135],
     ];
     for (const [px, py, pz, pr] of puffOffsets) {
       const puff = new THREE.Mesh(SHARED_SPHERE, hairMat);
-      puff.scale.set(pr * 1.15, pr * 0.9, pr * 1.1);
+      puff.scale.set(pr * 1.12, pr * 0.85, pr * 1.05);
       puff.position.set(px, py, pz);
       headGroup.add(puff);
     }
@@ -1799,15 +1803,15 @@ export function createBlockyRunner(
   if (hatStyle === 'headband') {
     const headband = new THREE.Mesh(SHARED_HEADBAND_RING, headbandMat);
     headband.rotation.x = Math.PI / 2;
-    headband.position.set(0, 0.54, 0);
+    headband.position.set(0, 0.57, 0);
     // Trailing athletic headband tails behind head
     const tailL = new THREE.Mesh(SHARED_CAPSULE, headbandMat);
     tailL.scale.set(0.06, 0.18, 0.03);
-    tailL.position.set(-0.07, 0.44, -0.39);
+    tailL.position.set(-0.07, 0.46, -0.39);
     tailL.rotation.set(0.38, 0, -0.28);
     const tailR = new THREE.Mesh(SHARED_CAPSULE, headbandMat);
     tailR.scale.set(0.06, 0.2, 0.03);
-    tailR.position.set(0.07, 0.42, -0.4);
+    tailR.position.set(0.07, 0.44, -0.4);
     tailR.rotation.set(0.45, 0, 0.28);
     headGroup.add(headband, tailL, tailR);
   } else if (hatStyle === 'cyber_goggles') {
@@ -1817,14 +1821,14 @@ export function createBlockyRunner(
     const band = new THREE.Mesh(SHARED_HEADBAND_RING, redShellMat);
     band.rotation.x = Math.PI / 2;
     band.scale.set(1.04, 1.04, 1.4);
-    band.position.set(0, 0.58, 0);
+    band.position.set(0, 0.6, 0);
     for (const sx of [-0.14, 0.14]) {
       const rim = new THREE.Mesh(SHARED_GOGGLE_RING, redShellMat);
-      rim.position.set(sx, 0.58, 0.35);
+      rim.position.set(sx, 0.6, 0.34);
       const lens = new THREE.Mesh(SHARED_CYL, cyanLensMat);
       lens.rotation.x = Math.PI / 2;
       lens.scale.set(0.085, 0.04, 0.085);
-      lens.position.set(sx, 0.58, 0.355);
+      lens.position.set(sx, 0.6, 0.345);
       headGroup.add(rim, lens);
     }
     headGroup.add(band);
@@ -1834,13 +1838,14 @@ export function createBlockyRunner(
     const goldMat = makeMat('#FACC15', 0.28, 0.6);
     const crown = new THREE.Mesh(SHARED_CAP_DOME, hatBrown);
     crown.scale.set(1.04, 0.92, 1.04);
-    crown.position.set(0, 0.46, 0);
+    crown.position.set(0, 0.5, -0.02);
+    crown.rotation.x = -0.14;
     const brim = new THREE.Mesh(SHARED_PIRATE_BRIM, pinkTrim);
-    brim.position.set(0, 0.62, 0.02);
+    brim.position.set(0, 0.65, 0.02);
     const goldEdge = new THREE.Mesh(SHARED_HEADBAND_RING, goldMat);
     goldEdge.rotation.x = Math.PI / 2;
     goldEdge.scale.set(1.36, 1.36, 0.72);
-    goldEdge.position.set(0, 0.65, 0.02);
+    goldEdge.position.set(0, 0.68, 0.02);
     headGroup.add(crown, brim, goldEdge);
   } else if (hatStyle === 'pirate_tricorn_girl') {
     const hatNavy = makeMat('#334155', 0.68);
@@ -1848,13 +1853,14 @@ export function createBlockyRunner(
     const whiteMat = makeMat('#FFFFFF', 0.45);
     const crown = new THREE.Mesh(SHARED_CAP_DOME, hatNavy);
     crown.scale.set(1.02, 0.88, 1.02);
-    crown.position.set(0, 0.46, 0);
+    crown.position.set(0, 0.5, -0.02);
+    crown.rotation.x = -0.14;
     const brim = new THREE.Mesh(SHARED_PIRATE_BRIM, hatRed);
-    brim.position.set(0, 0.62, 0.02);
+    brim.position.set(0, 0.65, 0.02);
     for (const sx of [-0.18, 0, 0.18]) {
       const emblem = new THREE.Mesh(SHARED_SPHERE, whiteMat);
       emblem.scale.set(0.045, 0.045, 0.035);
-      emblem.position.set(sx, 0.63, 0.46);
+      emblem.position.set(sx, 0.66, 0.46);
       headGroup.add(emblem);
     }
     headGroup.add(crown, brim);
@@ -1864,12 +1870,13 @@ export function createBlockyRunner(
     const padMat = makeMat('#334155', 0.75);
     const cap = new THREE.Mesh(SHARED_CAP_DOME, capMat);
     cap.scale.set(1.03, 0.9, 1.03);
-    cap.position.set(0, 0.44, 0);
+    cap.position.set(0, 0.49, -0.02);
+    cap.rotation.x = -0.16;
     const visor = new THREE.Mesh(SHARED_CAP_VISOR, capMat);
-    visor.position.set(0, 0.58, 0.24);
-    visor.rotation.x = 0.08;
+    visor.position.set(0, 0.61, 0.22);
+    visor.rotation.x = -0.05;
     const arch = new THREE.Mesh(SHARED_HEADPHONE_ARCH, phoneMat);
-    arch.position.set(0, 0.38, 0);
+    arch.position.set(0, 0.4, 0);
     for (const side of [-1, 1] as const) {
       const cup = new THREE.Mesh(SHARED_EAR_CUP, phoneMat);
       cup.rotation.z = Math.PI / 2;
@@ -1884,10 +1891,11 @@ export function createBlockyRunner(
     const beanieMat = makeMat('#111827', 0.88);
     const dome = new THREE.Mesh(SHARED_CAP_DOME, beanieMat);
     dome.scale.set(1.04, 1.02, 1.04);
-    dome.position.set(0, 0.46, -0.02);
+    dome.position.set(0, 0.51, -0.04);
+    dome.rotation.x = -0.22;
     const cuff = new THREE.Mesh(SHARED_BEANIE_CUFF, beanieMat);
-    cuff.rotation.x = Math.PI / 2;
-    cuff.position.set(0, 0.56, -0.01);
+    cuff.rotation.x = Math.PI / 2 - 0.18;
+    cuff.position.set(0, 0.59, -0.02);
     headGroup.add(dome, cuff);
   } else if (hatStyle === 'pink_neko') {
     const whiteMat = makeMat('#FFFFFF', 0.32, 0.15);
@@ -1918,42 +1926,44 @@ export function createBlockyRunner(
       const lens = new THREE.Mesh(SHARED_CYL, shadeMat);
       lens.rotation.x = Math.PI / 2;
       lens.scale.set(0.105, 0.045, 0.075);
-      lens.position.set(sx, 0.62, 0.33);
+      lens.position.set(sx, 0.63, 0.32);
       headGroup.add(lens);
     }
     const bridge = new THREE.Mesh(SHARED_CAPSULE, shadeMat);
     bridge.rotation.z = Math.PI / 2;
     bridge.scale.set(0.03, 0.1, 0.03);
-    bridge.position.set(0, 0.63, 0.34);
+    bridge.position.set(0, 0.64, 0.33);
     headGroup.add(bridge);
   } else if (hatStyle === 'skater_cap') {
     const whiteCap = makeMat('#FFFFFF', 0.6);
     const blackBrim = makeMat('#111827', 0.6);
     const dome = new THREE.Mesh(SHARED_CAP_DOME, whiteCap);
     dome.scale.set(1.03, 0.9, 1.03);
-    dome.position.set(0, 0.44, 0);
+    dome.position.set(0, 0.49, -0.02);
+    dome.rotation.x = -0.16;
     const visor = new THREE.Mesh(SHARED_CAP_VISOR, blackBrim);
-    visor.position.set(0, 0.58, 0.24);
-    visor.rotation.x = 0.08;
+    visor.position.set(0, 0.61, 0.22);
+    visor.rotation.x = -0.05;
     const band = new THREE.Mesh(SHARED_HEADBAND_RING, blackBrim);
-    band.rotation.x = Math.PI / 2;
+    band.rotation.x = Math.PI / 2 - 0.12;
     band.scale.set(1.03, 1.03, 0.65);
-    band.position.set(0, 0.56, 0);
+    band.position.set(0, 0.59, -0.01);
     headGroup.add(dome, visor, band);
   } else if (hatStyle === 'knight_helm') {
     const goldMat = makeMat('#FACC15', 0.22, 0.78);
     const redMat = makeMat('#DC2626', 0.35, 0.45);
     const dome = new THREE.Mesh(SHARED_CAP_DOME, goldMat);
     dome.scale.set(1.06, 0.96, 1.06);
-    dome.position.set(0, 0.44, 0);
+    dome.position.set(0, 0.49, -0.02);
+    dome.rotation.x = -0.14;
     const brow = new THREE.Mesh(SHARED_HEADBAND_RING, redMat);
-    brow.rotation.x = Math.PI / 2;
+    brow.rotation.x = Math.PI / 2 - 0.1;
     brow.scale.set(1.06, 1.06, 1.15);
-    brow.position.set(0, 0.58, 0);
+    brow.position.set(0, 0.6, 0);
     for (let i = 0; i < 4; i++) {
       const plume = new THREE.Mesh(SHARED_HAIR_STRAND, redMat);
       plume.scale.set(0.28, 0.32, 0.42);
-      plume.position.set(0, 0.84 - i * 0.04, 0.14 - i * 0.16);
+      plume.position.set(0, 0.85 - i * 0.04, 0.12 - i * 0.16);
       plume.rotation.x = -0.35 - i * 0.22;
       headGroup.add(plume);
     }
@@ -1981,14 +1991,16 @@ export function createBlockyRunner(
     const yellowMat = makeMat('#FACC15', 0.26, 0.2);
     const shell = new THREE.Mesh(SHARED_CAP_DOME, yellowMat);
     shell.scale.set(1.08, 0.96, 1.08);
-    shell.position.set(0, 0.45, 0);
+    shell.position.set(0, 0.5, -0.02);
+    shell.rotation.x = -0.14;
     const ridge = new THREE.Mesh(SHARED_CAPSULE, yellowMat);
     ridge.rotation.x = Math.PI / 2;
     ridge.scale.set(0.16, 0.36, 0.12);
-    ridge.position.set(0, 0.78, 0);
+    ridge.position.set(0, 0.8, 0);
     const brim = new THREE.Mesh(SHARED_CAP_VISOR, yellowMat);
     brim.scale.set(1.08, 1.0, 1.08);
-    brim.position.set(0, 0.58, 0.23);
+    brim.position.set(0, 0.61, 0.21);
+    brim.rotation.x = -0.05;
     headGroup.add(shell, ridge, brim);
   }
 

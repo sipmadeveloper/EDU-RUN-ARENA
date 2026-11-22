@@ -6,6 +6,11 @@ import {
   type TrackPose,
 } from './stadiumAssets';
 import { createSurroundingCity } from './createSurroundingCity';
+import {
+  buildExteriorNavGraph,
+  createPathfindingNpcAgents,
+  stepPathfindingNpcAgents,
+} from './exteriorPathfinding';
 
 export interface StadiumExteriorGroundsOptions {
   straightLen: number;
@@ -938,7 +943,7 @@ export function createStadiumExteriorGrounds(
     }
   }
 
-  // Monumental Double Swinging Wrought-Iron Entrance Gate Doors (swung open outward for cars & visitors)
+  // Monumental Double Swinging Wrought-Iron Entrance Gate Doors (swung WIDE OPEN for cars & visitors)
   const grandLeafVGeo = new THREE.BoxGeometry(0.32, 8.2, 0.32);
   const grandLeafHGeo = new THREE.BoxGeometry(12.2, 0.3, 0.28);
   const grandLeafPicketGeo = new THREE.BoxGeometry(0.16, 7.8, 0.16);
@@ -948,7 +953,8 @@ export function createStadiumExteriorGrounds(
   const buildMonumentalFrontGateLeaf = (side: -1 | 1) => {
     const leaf = new THREE.Group();
     leaf.position.set(side * 12.6, 0.2, 0);
-    leaf.rotation.y = side === -1 ? -0.68 : 0.68;
+    // Swing both wrought-iron gate leaves wide open (~84 deg) along the road edges so vehicles pass freely
+    leaf.rotation.y = side === -1 ? -1.46 : 1.46;
     const dir = -side;
     const leafW = 12.2;
     const midX = dir * (leafW / 2);
@@ -1005,6 +1011,38 @@ export function createStadiumExteriorGrounds(
   guardRoof.position.set(-22.0, 4.32, -2.6);
   frontGateGrp.add(guardBase, guardGlass, guardRoof);
   disposables.push(guardBaseGeo, guardRoofGeo, guardGlassGeo, guardGlassMat);
+
+  // Raised (open) entry & exit boom barriers flanking the wide-open Front Gate vehicle lanes
+  const barrierBoxGeo = new THREE.BoxGeometry(0.75, 1.45, 0.75);
+  const barrierArmGeo = new THREE.BoxGeometry(5.6, 0.16, 0.16);
+  const barrierStripeGeo = new THREE.BoxGeometry(0.75, 0.18, 0.18);
+  const barrierRedMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4, metalness: 0.2 });
+  const barrierWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4, metalness: 0.15 });
+  disposables.push(barrierBoxGeo, barrierArmGeo, barrierStripeGeo, barrierRedMat, barrierWhiteMat);
+
+  for (const side of [-1, 1] as const) {
+    const barrierUnit = new THREE.Group();
+    barrierUnit.position.set(side * 11.4, 0.1, -2.2);
+    const housing = new THREE.Mesh(barrierBoxGeo, goldAccentMat);
+    housing.position.y = 0.72;
+    barrierUnit.add(housing);
+
+    const armPivot = new THREE.Group();
+    armPivot.position.set(0, 1.28, 0);
+    // Raised open at ~78 degrees so inbound & outbound vehicles pass cleanly underneath
+    armPivot.rotation.z = side === -1 ? 1.36 : -1.36;
+    const armDir = -side;
+    const armBar = new THREE.Mesh(barrierArmGeo, barrierWhiteMat);
+    armBar.position.set(armDir * 2.8, 0, 0);
+    armPivot.add(armBar);
+    for (let st = 0; st < 4; st++) {
+      const stripe = new THREE.Mesh(barrierStripeGeo, barrierRedMat);
+      stripe.position.set(armDir * (0.9 + st * 1.25), 0, 0);
+      armPivot.add(stripe);
+    }
+    barrierUnit.add(armPivot);
+    frontGateGrp.add(barrierUnit);
+  }
 
   group.add(frontGateGrp);
 
@@ -1077,20 +1115,6 @@ export function createStadiumExteriorGrounds(
         z: Math.sin(phi) * 276,
         scale: 0.96 + (seed / 10) * 0.2,
         yaw: seed * 0.71,
-        hasRoundPlanter: true,
-      });
-    }
-
-    // C) Outer-flank shade trees along the Batako shoulder edge right beside the North-East/North-West side parking entry
-    for (let k = 0; k < 4; k++) {
-      const basePhi = -0.275 * Math.PI + k * 0.01;
-      if (k > 0) continue; // keep side parking entry wide open
-      const phi = side === 1 ? basePhi : Math.PI - basePhi;
-      treeCoords.push({
-        x: side * halfL + Math.cos(phi) * 340,
-        z: Math.sin(phi) * 340,
-        scale: 1.02,
-        yaw: 0.9,
         hasRoundPlanter: true,
       });
     }
@@ -1266,6 +1290,157 @@ export function createStadiumExteriorGrounds(
   lampHeadInst.instanceMatrix.needsUpdate = true;
   group.add(lampPoleInst, lampArmInst, lampHeadInst);
   disposables.push(lampPoleGeo, lampArmGeo, lampHeadGeo);
+
+  // =========================================================================
+  // 4B. EXTERIOR STADIUM CANTEEN / FOOD COURT PAVILIONS (WEST & EAST PLAZAS)
+  //     Destination hubs for dynamic pathfinding NPCs walking from parking & tribunes
+  // =========================================================================
+  const navGraph = buildExteriorNavGraph(straightLen);
+
+  const canteenWallMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.78, metalness: 0.04 });
+  const canteenBaseMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.82, metalness: 0.08 });
+  const canteenCounterMat = new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.52, metalness: 0.14 });
+  const canteenAwningRedMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.45, metalness: 0.1 });
+  const canteenAwningCreamMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.55, metalness: 0.04 });
+  const canteenWindowGlowMat = new THREE.MeshBasicMaterial({ color: 0xfde68a });
+  const canteenPatioMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.84, metalness: 0.04 });
+  const umbrellaMats = [
+    new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.55, metalness: 0.05 }),
+    new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.55, metalness: 0.05 }),
+    new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.55, metalness: 0.05 }),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.55, metalness: 0.05 }),
+  ];
+
+  const canteenPatioGeo = new THREE.BoxGeometry(24.0, 0.24, 18.0);
+  const canteenBodyGeo = new THREE.BoxGeometry(16.0, 4.4, 7.0);
+  const canteenPlinthGeo = new THREE.BoxGeometry(16.4, 1.0, 7.4);
+  const canteenWindowGeo = new THREE.BoxGeometry(13.2, 1.9, 0.22);
+  const canteenCounterGeo = new THREE.BoxGeometry(13.8, 1.2, 1.4);
+  const canteenRoofGeo = new THREE.BoxGeometry(18.6, 0.55, 10.6);
+  const canteenStripeGeo = new THREE.BoxGeometry(1.55, 0.52, 2.4);
+  const canteenBoardGeo = new THREE.BoxGeometry(14.8, 2.4, 0.36);
+  const canteenSignGeo = new THREE.PlaneGeometry(14.2, 2.1);
+  const cafePoleGeo = new THREE.CylinderGeometry(0.09, 0.11, 2.85, 7);
+  const cafeTableGeo = new THREE.CylinderGeometry(1.15, 1.15, 0.14, 10);
+  const cafeStoolGeo = new THREE.CylinderGeometry(0.32, 0.34, 0.62, 8);
+  const cafeUmbrellaGeo = new THREE.ConeGeometry(2.1, 0.72, 8);
+
+  disposables.push(
+    canteenWallMat,
+    canteenBaseMat,
+    canteenCounterMat,
+    canteenAwningRedMat,
+    canteenAwningCreamMat,
+    canteenWindowGlowMat,
+    canteenPatioMat,
+    ...umbrellaMats,
+    canteenPatioGeo,
+    canteenBodyGeo,
+    canteenPlinthGeo,
+    canteenWindowGeo,
+    canteenCounterGeo,
+    canteenRoofGeo,
+    canteenStripeGeo,
+    canteenBoardGeo,
+    canteenSignGeo,
+    cafePoleGeo,
+    cafeTableGeo,
+    cafeStoolGeo,
+    cafeUmbrellaGeo
+  );
+
+  const buildCanteenPavilion = (
+    pos: { x: number; z: number; yaw: number },
+    title: string,
+    accentHex: string
+  ) => {
+    const cGrp = new THREE.Group();
+    cGrp.position.set(pos.x, PLAZA_Y, pos.z);
+    cGrp.rotation.y = pos.yaw;
+
+    const patio = new THREE.Mesh(canteenPatioGeo, canteenPatioMat);
+    patio.position.set(0, 0.12, 2.2);
+    cGrp.add(patio);
+
+    const plinth = new THREE.Mesh(canteenPlinthGeo, canteenBaseMat);
+    plinth.position.set(0, 0.62, -2.4);
+    const body = new THREE.Mesh(canteenBodyGeo, canteenWallMat);
+    body.position.set(0, 2.42, -2.4);
+    const winGlow = new THREE.Mesh(canteenWindowGeo, canteenWindowGlowMat);
+    winGlow.position.set(0, 2.75, 1.12);
+    const counter = new THREE.Mesh(canteenCounterGeo, canteenCounterMat);
+    counter.position.set(0, 0.82, 1.65);
+    const roof = new THREE.Mesh(canteenRoofGeo, navyStoneMat);
+    roof.position.set(0, 4.88, -1.2);
+    cGrp.add(plinth, body, winGlow, counter, roof);
+
+    // Striped festive food-court awning canopy projecting over serving counter
+    for (let s = 0; s < 11; s++) {
+      const stripe = new THREE.Mesh(
+        canteenStripeGeo,
+        s % 2 === 0 ? canteenAwningRedMat : canteenAwningCreamMat
+      );
+      stripe.position.set(-7.75 + s * 1.55, 4.25, 2.8);
+      stripe.rotation.x = 0.26;
+      cGrp.add(stripe);
+    }
+
+    // Glowing overhead Canteen Signboard
+    const signTex = createExteriorSignTexture(
+      'AREA KULINER & ISTIRAHAT PENONTON',
+      title,
+      accentHex,
+      maxAnisotropy,
+      1024,
+      200
+    );
+    const signMat = new THREE.MeshStandardMaterial({
+      map: signTex,
+      roughness: 0.25,
+      emissive: 0x1e293b,
+      emissiveIntensity: 0.45,
+    });
+    disposables.push(signTex, signMat);
+
+    const signBoard = new THREE.Mesh(canteenBoardGeo, navyStoneMat);
+    signBoard.position.set(0, 6.25, 1.6);
+    const signFaceF = new THREE.Mesh(canteenSignGeo, signMat);
+    signFaceF.position.set(0, 6.25, 1.8);
+    const signFaceB = new THREE.Mesh(canteenSignGeo, signMat);
+    signFaceB.position.set(0, 6.25, 1.4);
+    signFaceB.rotation.y = Math.PI;
+    cGrp.add(signBoard, signFaceF, signFaceB);
+
+    // 4 Outdoor Café Tables with Colorful Umbrellas & Stools on the front patio
+    const tableOffsets: Array<[number, number]> = [
+      [-7.4, 5.6],
+      [-2.5, 7.4],
+      [2.5, 7.4],
+      [7.4, 5.6],
+    ];
+    for (let t = 0; t < tableOffsets.length; t++) {
+      const [tx, tz] = tableOffsets[t];
+      const pole = new THREE.Mesh(cafePoleGeo, ironFenceMat);
+      pole.position.set(tx, 1.65, tz);
+      const top = new THREE.Mesh(cafeTableGeo, copingMat);
+      top.position.set(tx, 1.12, tz);
+      const umbrella = new THREE.Mesh(cafeUmbrellaGeo, umbrellaMats[t % umbrellaMats.length]);
+      umbrella.position.set(tx, 3.18, tz);
+      cGrp.add(pole, top, umbrella);
+
+      for (let st = 0; st < 3; st++) {
+        const ang = (st / 3) * Math.PI * 2 + 0.4;
+        const stool = new THREE.Mesh(cafeStoolGeo, canteenCounterMat);
+        stool.position.set(tx + Math.cos(ang) * 1.45, 0.52, tz + Math.sin(ang) * 1.45);
+        cGrp.add(stool);
+      }
+    }
+
+    group.add(cGrp);
+  };
+
+  buildCanteenPavilion(navGraph.canteenPositions.west, 'KANTIN STADION BARAT', '#EA580C');
+  buildCanteenPavilion(navGraph.canteenPositions.east, 'KANTIN STADION TIMUR', '#0284C7');
 
   // =========================================================================
   // 5. EXPANDED WRAP-AROUND CAR & MOTORCYCLE PARKING (REAR + LEFT & RIGHT SIDES OF STADIUM)
@@ -1685,35 +1860,103 @@ export function createStadiumExteriorGrounds(
   if (carCabinInst.instanceColor) carCabinInst.instanceColor.needsUpdate = true;
   group.add(carBodyInst, carCabinInst, carGlassInst, carWheelInst, carHeadInst, carTailInst);
 
-  // ---- 5A-2. ANIMATED CRUISING CARS ON THE 360° ASPHALT RING ROAD (12 cars) ----
-  const roadCarCount = 12;
+  // ---- 5A-2. ANIMATED CRUISING CARS ON RING ROAD + VEHICLES DRIVING IN & OUT THROUGH THE OPEN FRONT GATE ----
+  // 8 inner-lane ring road cruisers + 18 gate-entry/exit vehicles flowing continuously from City Avenue -> Open Front Gate -> Stadium Ring Road -> Open Front Gate -> City Avenue!
+  const ringRoadCarCount = 8;
+  const gateTrafficCarCount = 18;
+  const totalRoadCarCount = ringRoadCarCount + gateTrafficCarCount;
+
   const roadCars: Array<{ radius: number; s0: number; speedS: number; dir: 1 | -1; colorIdx: number }> = [];
-  for (let i = 0; i < roadCarCount; i++) {
-    const outerLane = i % 2 === 0;
+  for (let i = 0; i < ringRoadCarCount; i++) {
     roadCars.push({
-      radius: outerLane ? 367.5 : 359.5,
-      s0: i / roadCarCount + (outerLane ? 0.02 : 0.06),
-      speedS: (outerLane ? 0.011 : 0.0095) + (i % 3) * 0.0012,
-      dir: outerLane ? 1 : -1,
+      radius: 359.5, // inner lane (clockwise, dir = -1) — zero conflicts with gate-entry traffic on outer lane!
+      s0: i / ringRoadCarCount + 0.04,
+      speedS: 0.0098 + (i % 3) * 0.001,
+      dir: -1,
       colorIdx: (i * 3 + 1) % carColors.length,
     });
   }
-  const roadCarBodyInst = new THREE.InstancedMesh(carBodyGeo, carPaintMat, roadCarCount);
-  const roadCarCabinInst = new THREE.InstancedMesh(carCabinGeo, carPaintMat, roadCarCount);
-  const roadCarGlassInst = new THREE.InstancedMesh(carGlassGeo, carGlassMat, roadCarCount);
-  const roadCarWheelInst = new THREE.InstancedMesh(carWheelGeo, tireMat, roadCarCount * 4);
-  const roadCarHeadInst = new THREE.InstancedMesh(carLightGeo, warmGlowMat, roadCarCount);
-  const roadCarTailInst = new THREE.InstancedMesh(carLightGeo, tailLightMat, roadCarCount);
+
+  // Smooth non-crossing CatmullRomCurve3 connecting North City Avenue -> Open Front Gate Entry Lane (x=-5.6) ->
+  // Outer Ring Road (r=367.5, CCW around West Parking -> Rear Parking -> East Parking) -> Open Front Gate Exit Lane (x=+5.6) -> North City Avenue
+  const gateTrafficWaypoints: THREE.Vector3[] = [
+    // Approach straight South down North City Grand Avenue & through Wide-Open Front Gate (Entry Lane x = -5.6)
+    new THREE.Vector3(-5.6, 0, -720),
+    new THREE.Vector3(-5.6, 0, -560),
+    new THREE.Vector3(-5.6, 0, -440),
+    new THREE.Vector3(-5.6, 0, -396),
+    new THREE.Vector3(-5.6, 0, -376), // Passes directly through Open Front Gate!
+    new THREE.Vector3(-8.2, 0, -369.5),
+    new THREE.Vector3(-34, 0, -367.5),
+    new THREE.Vector3(-halfL * 0.55, 0, -367.5),
+    new THREE.Vector3(-halfL, 0, -367.5),
+  ];
+  // West curved flank around West Side Parking (r = 367.5, heading South)
+  for (let k = 1; k <= 7; k++) {
+    const theta = -Math.PI / 2 - (k / 8) * Math.PI;
+    gateTrafficWaypoints.push(
+      new THREE.Vector3(-halfL + Math.cos(theta) * 367.5, 0, Math.sin(theta) * 367.5)
+    );
+  }
+  // South Rear Parking straightaway (heading East)
+  gateTrafficWaypoints.push(
+    new THREE.Vector3(-halfL, 0, 367.5),
+    new THREE.Vector3(-halfL * 0.35, 0, 367.5),
+    new THREE.Vector3(halfL * 0.35, 0, 367.5),
+    new THREE.Vector3(halfL, 0, 367.5)
+  );
+  // East curved flank around East Side Parking (r = 367.5, heading North)
+  for (let k = 1; k <= 7; k++) {
+    const theta = Math.PI / 2 - (k / 8) * Math.PI;
+    gateTrafficWaypoints.push(
+      new THREE.Vector3(halfL + Math.cos(theta) * 367.5, 0, Math.sin(theta) * 367.5)
+    );
+  }
+  // Return along North Ring Road & exit straight North through Wide-Open Front Gate (Exit Lane x = +5.6)
+  gateTrafficWaypoints.push(
+    new THREE.Vector3(halfL, 0, -367.5),
+    new THREE.Vector3(halfL * 0.55, 0, -367.5),
+    new THREE.Vector3(34, 0, -367.5),
+    new THREE.Vector3(8.2, 0, -369.5),
+    new THREE.Vector3(5.6, 0, -376), // Exits directly through Open Front Gate!
+    new THREE.Vector3(5.6, 0, -396),
+    new THREE.Vector3(5.6, 0, -440),
+    new THREE.Vector3(5.6, 0, -560),
+    new THREE.Vector3(5.6, 0, -720)
+  );
+
+  const gateTrafficCurve = new THREE.CatmullRomCurve3(gateTrafficWaypoints, false, 'centripetal', 0.25);
+  const gateTrafficCars: Array<{ u0: number; speedU: number; colorIdx: number }> = [];
+  for (let i = 0; i < gateTrafficCarCount; i++) {
+    gateTrafficCars.push({
+      u0: i / gateTrafficCarCount,
+      speedU: 0.0086, // uniform convoy speed (~33 m/s) so cars maintain clean spacing & never overlap
+      colorIdx: (i * 5 + 2) % carColors.length,
+    });
+  }
+
+  const roadCarBodyInst = new THREE.InstancedMesh(carBodyGeo, carPaintMat, totalRoadCarCount);
+  const roadCarCabinInst = new THREE.InstancedMesh(carCabinGeo, carPaintMat, totalRoadCarCount);
+  const roadCarGlassInst = new THREE.InstancedMesh(carGlassGeo, carGlassMat, totalRoadCarCount);
+  const roadCarWheelInst = new THREE.InstancedMesh(carWheelGeo, tireMat, totalRoadCarCount * 4);
+  const roadCarHeadInst = new THREE.InstancedMesh(carLightGeo, warmGlowMat, totalRoadCarCount);
+  const roadCarTailInst = new THREE.InstancedMesh(carLightGeo, tailLightMat, totalRoadCarCount);
   roadCarBodyInst.frustumCulled = false;
   roadCarCabinInst.frustumCulled = false;
   roadCarGlassInst.frustumCulled = false;
   roadCarWheelInst.frustumCulled = false;
   roadCarHeadInst.frustumCulled = false;
   roadCarTailInst.frustumCulled = false;
-  for (let i = 0; i < roadCarCount; i++) {
+  for (let i = 0; i < ringRoadCarCount; i++) {
     const tint = carColors[roadCars[i].colorIdx];
     roadCarBodyInst.setColorAt(i, tint);
     roadCarCabinInst.setColorAt(i, tint);
+  }
+  for (let i = 0; i < gateTrafficCarCount; i++) {
+    const tint = carColors[gateTrafficCars[i].colorIdx];
+    const instIdx = ringRoadCarCount + i;
+    roadCarBodyInst.setColorAt(instIdx, tint);
+    roadCarCabinInst.setColorAt(instIdx, tint);
   }
   if (roadCarBodyInst.instanceColor) roadCarBodyInst.instanceColor.needsUpdate = true;
   if (roadCarCabinInst.instanceColor) roadCarCabinInst.instanceColor.needsUpdate = true;
@@ -2022,7 +2265,10 @@ export function createStadiumExteriorGrounds(
     });
   }
 
-  const pedCount = pedRoutes.length; // 184 animated exterior pedestrians!
+  // E) 96 Dynamic A* Pathfinding NPCs navigating dynamically between Parking Entrances -> Canteens -> Tribune Entrances!
+  const pathAgents = createPathfindingNpcAgents(navGraph, 96);
+  const staticPedCount = pedRoutes.length;
+  const pedCount = staticPedCount + pathAgents.length; // 286 animated exterior pedestrians (zero extra draw calls!)
   const pedMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
   const pedTorsoGeo = new THREE.BoxGeometry(0.46, 0.64, 0.26);
   const pedHeadGeo = new THREE.SphereGeometry(0.21, 7, 5);
@@ -2114,17 +2360,81 @@ export function createStadiumExteriorGrounds(
   group.add(surroundingCity.group);
   disposables.push(...surroundingCity.disposables);
 
-  // Reusable zero-GC scratch objects for per-frame pedestrian & cruising car updates
+  // Reusable zero-GC scratch objects for per-frame pedestrian, pathfinding & gate vehicle updates
   const _poseTmp: TrackPose = { x: 0, z: 0, yaw: 0, fx: 1, fz: 0 };
+  const _curvePosTmp = new THREE.Vector3();
+  const _curveTanTmp = new THREE.Vector3();
   const _pedDummy = new THREE.Object3D();
   _pedDummy.rotation.order = 'YXZ';
+  let lastElapsed = -1;
+
+  const writePedestrianPose = (
+    idx: number,
+    px: number,
+    pz: number,
+    yaw: number,
+    sc: number,
+    walkCycle: number,
+    isMoving: boolean
+  ) => {
+    const swing = isMoving ? Math.sin(walkCycle) * 0.58 : 0;
+    const bob = isMoving ? Math.abs(Math.cos(walkCycle)) * 0.08 * sc : 0;
+    const baseY = PLAZA_Y + bob;
+    const cosY = Math.cos(yaw);
+    const sinY = Math.sin(yaw);
+
+    _pedDummy.scale.set(sc, sc, sc);
+
+    // Torso
+    _pedDummy.position.set(px, baseY + 0.94 * sc, pz);
+    _pedDummy.rotation.set(isMoving ? 0.05 : 0, yaw, 0);
+    _pedDummy.updateMatrix();
+    pedTorsoInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    // Head & Hair
+    _pedDummy.position.set(px, baseY + 1.48 * sc, pz);
+    _pedDummy.rotation.set(0, yaw, 0);
+    _pedDummy.updateMatrix();
+    pedHeadInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    _pedDummy.position.set(px, baseY + 1.51 * sc, pz);
+    _pedDummy.updateMatrix();
+    pedHairInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    // Left & Right Legs swinging in realistic walking stride
+    const legOffX = 0.13 * sc;
+    _pedDummy.position.set(px - cosY * legOffX, baseY + 0.64 * sc, pz + sinY * legOffX);
+    _pedDummy.rotation.set(swing, yaw, 0);
+    _pedDummy.updateMatrix();
+    pedLegLInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    _pedDummy.position.set(px + cosY * legOffX, baseY + 0.64 * sc, pz - sinY * legOffX);
+    _pedDummy.rotation.set(-swing, yaw, 0);
+    _pedDummy.updateMatrix();
+    pedLegRInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    // Left & Right Arms swinging counter-phase to legs
+    const armOffX = 0.31 * sc;
+    _pedDummy.position.set(px - cosY * armOffX, baseY + 1.2 * sc, pz + sinY * armOffX);
+    _pedDummy.rotation.set(-swing * 0.85, yaw, 0.08);
+    _pedDummy.updateMatrix();
+    pedArmLInst.setMatrixAt(idx, _pedDummy.matrix);
+
+    _pedDummy.position.set(px + cosY * armOffX, baseY + 1.2 * sc, pz - sinY * armOffX);
+    _pedDummy.rotation.set(swing * 0.85, yaw, -0.08);
+    _pedDummy.updateMatrix();
+    pedArmRInst.setMatrixAt(idx, _pedDummy.matrix);
+  };
 
   function update(elapsed: number) {
+    const dt = lastElapsed < 0 ? 0 : Math.min(Math.max(elapsed - lastElapsed, 0), 0.12);
+    lastElapsed = elapsed;
+
     // 0. Update bustling surrounding city traffic (cars, city buses & city sidewalk pedestrians)
     surroundingCity.update(elapsed);
 
-    // 1. Update 12 animated cruising cars smoothly around the 360° Asphalt Ring Road
-    for (let i = 0; i < roadCarCount; i++) {
+    // 1A. Update 8 animated cruising cars on the inner 360° Asphalt Ring Road
+    for (let i = 0; i < ringRoadCarCount; i++) {
       const rc = roadCars[i];
       const s = ((rc.s0 + elapsed * rc.speedS * rc.dir) % 1 + 1) % 1;
       const p = evaluateStadiumOval(s, rc.radius, straightLen, midR, _poseTmp);
@@ -2142,6 +2452,28 @@ export function createStadiumExteriorGrounds(
         yaw
       );
     }
+
+    // 1B. Update 18 animated vehicles actively driving IN & OUT through the Wide-Open Front Gate
+    for (let i = 0; i < gateTrafficCarCount; i++) {
+      const gc = gateTrafficCars[i];
+      const u = ((gc.u0 + elapsed * gc.speedU) % 1 + 1) % 1;
+      gateTrafficCurve.getPointAt(u, _curvePosTmp);
+      gateTrafficCurve.getTangentAt(u, _curveTanTmp);
+      const yaw = Math.atan2(_curveTanTmp.x, _curveTanTmp.z);
+      setCarTransform(
+        roadCarBodyInst,
+        roadCarCabinInst,
+        roadCarGlassInst,
+        roadCarWheelInst,
+        roadCarHeadInst,
+        roadCarTailInst,
+        ringRoadCarCount + i,
+        _curvePosTmp.x,
+        _curvePosTmp.z,
+        yaw
+      );
+    }
+
     roadCarBodyInst.instanceMatrix.needsUpdate = true;
     roadCarCabinInst.instanceMatrix.needsUpdate = true;
     roadCarGlassInst.instanceMatrix.needsUpdate = true;
@@ -2149,8 +2481,8 @@ export function createStadiumExteriorGrounds(
     roadCarHeadInst.instanceMatrix.needsUpdate = true;
     roadCarTailInst.instanceMatrix.needsUpdate = true;
 
-    // 2. Update 184 animated exterior pedestrians walking in & out of the stadium
-    for (let i = 0; i < pedCount; i++) {
+    // 2A. Update static-loop exterior pedestrians walking around the front plaza & concourses
+    for (let i = 0; i < staticPedCount; i++) {
       const route = pedRoutes[i];
       let px = 0;
       let pz = 0;
@@ -2161,7 +2493,6 @@ export function createStadiumExteriorGrounds(
         const dx = route.x2 - route.x1;
         const dz = route.z2 - route.z1;
         const dist = Math.hypot(dx, dz) || 1;
-        // Loop smoothly back & forth or wrap continuously
         const uRaw = ((elapsed * route.speed + route.phase * 7.5) / dist) % 2;
         const goingForward = uRaw < 1;
         const t = goingForward ? uRaw : 2 - uRaw;
@@ -2180,55 +2511,22 @@ export function createStadiumExteriorGrounds(
         strideFreq = 7.4;
       }
 
-      const sc = route.scale;
-      const walkCycle = elapsed * strideFreq + route.phase;
-      const swing = Math.sin(walkCycle) * 0.58;
-      const bob = Math.abs(Math.cos(walkCycle)) * 0.08 * sc;
-      const baseY = PLAZA_Y + bob;
-      const cosY = Math.cos(yaw);
-      const sinY = Math.sin(yaw);
+      writePedestrianPose(i, px, pz, yaw, route.scale, elapsed * strideFreq + route.phase, true);
+    }
 
-      _pedDummy.scale.set(sc, sc, sc);
-
-      // Torso
-      _pedDummy.position.set(px, baseY + 0.94 * sc, pz);
-      _pedDummy.rotation.set(0.05, yaw, 0);
-      _pedDummy.updateMatrix();
-      pedTorsoInst.setMatrixAt(i, _pedDummy.matrix);
-
-      // Head & Hair
-      _pedDummy.position.set(px, baseY + 1.48 * sc, pz);
-      _pedDummy.rotation.set(0, yaw, 0);
-      _pedDummy.updateMatrix();
-      pedHeadInst.setMatrixAt(i, _pedDummy.matrix);
-
-      _pedDummy.position.set(px, baseY + 1.51 * sc, pz);
-      _pedDummy.updateMatrix();
-      pedHairInst.setMatrixAt(i, _pedDummy.matrix);
-
-      // Left & Right Legs swinging in realistic walking stride
-      const legOffX = 0.13 * sc;
-      _pedDummy.position.set(px - cosY * legOffX, baseY + 0.64 * sc, pz + sinY * legOffX);
-      _pedDummy.rotation.set(swing, yaw, 0);
-      _pedDummy.updateMatrix();
-      pedLegLInst.setMatrixAt(i, _pedDummy.matrix);
-
-      _pedDummy.position.set(px + cosY * legOffX, baseY + 0.64 * sc, pz - sinY * legOffX);
-      _pedDummy.rotation.set(-swing, yaw, 0);
-      _pedDummy.updateMatrix();
-      pedLegRInst.setMatrixAt(i, _pedDummy.matrix);
-
-      // Left & Right Arms swinging counter-phase to legs
-      const armOffX = 0.31 * sc;
-      _pedDummy.position.set(px - cosY * armOffX, baseY + 1.2 * sc, pz + sinY * armOffX);
-      _pedDummy.rotation.set(-swing * 0.85, yaw, 0.08);
-      _pedDummy.updateMatrix();
-      pedArmLInst.setMatrixAt(i, _pedDummy.matrix);
-
-      _pedDummy.position.set(px + cosY * armOffX, baseY + 1.2 * sc, pz - sinY * armOffX);
-      _pedDummy.rotation.set(swing * 0.85, yaw, -0.08);
-      _pedDummy.updateMatrix();
-      pedArmRInst.setMatrixAt(i, _pedDummy.matrix);
+    // 2B. Step & render 96 Dynamic A* Pathfinding NPCs navigating Parking <-> Canteens <-> Tribunes
+    stepPathfindingNpcAgents(navGraph, pathAgents, dt);
+    for (let i = 0; i < pathAgents.length; i++) {
+      const ag = pathAgents[i];
+      writePedestrianPose(
+        staticPedCount + i,
+        ag.x,
+        ag.z,
+        ag.yaw,
+        ag.scale,
+        elapsed * (ag.speed * 1.72) + ag.stridePhase,
+        ag.isMoving
+      );
     }
 
     for (const inst of pedInsts) {

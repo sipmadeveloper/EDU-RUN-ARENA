@@ -869,7 +869,77 @@ export function createFormalPresenterRig(castShadow = true): FormalPresenterRig 
   rightTemple.position.set(0.305, 0.44, 0.04);
   headGroup.add(leftTemple, rightTemple);
 
-  disposables.push(neckGeo, craniumGeo, facePatchGeo, earGeo, hairCapGeo, hairQuiffGeo, templeGeo);
+  // Executive 3D Black Sunglasses ("Kacamata Hitam") with sculpted frames, glossy dark lenses, gold bridge & temple arms
+  const sunglassesGroup = new THREE.Group();
+  const sgFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x090b10,
+    roughness: 0.26,
+    metalness: 0.58,
+  });
+  const sgLensMat = new THREE.MeshStandardMaterial({
+    color: 0x05070c,
+    roughness: 0.08,
+    metalness: 0.88,
+    emissive: 0x0f172a,
+    emissiveIntensity: 0.14,
+  });
+  const sgFrameGeo = new THREE.BoxGeometry(0.175, 0.106, 0.032);
+  const sgLensGeo = new THREE.BoxGeometry(0.152, 0.084, 0.022);
+  const sgBridgeGeo = new THREE.BoxGeometry(0.075, 0.018, 0.024);
+  const sgBrowBarGeo = new THREE.BoxGeometry(0.33, 0.016, 0.02);
+  const sgArmGeo = new THREE.BoxGeometry(0.018, 0.022, 0.34);
+  const sgHookGeo = new THREE.BoxGeometry(0.018, 0.055, 0.022);
+  const sgHingeGeo = new THREE.BoxGeometry(0.024, 0.024, 0.024);
+
+  for (const side of [-1, 1] as const) {
+    const frame = registerMesh(new THREE.Mesh(sgFrameGeo, sgFrameMat), false);
+    frame.position.set(side * 0.118, 0.376, 0.322);
+    frame.rotation.y = side * 0.14;
+
+    const lens = registerMesh(new THREE.Mesh(sgLensGeo, sgLensMat), false);
+    lens.position.set(side * 0.118, 0.376, 0.33);
+    lens.rotation.y = side * 0.14;
+
+    const hinge = registerMesh(new THREE.Mesh(sgHingeGeo, buckleMat), false);
+    hinge.position.set(side * 0.21, 0.398, 0.304);
+
+    // Temple arm angling back cleanly to the top of each ear
+    const arm = registerMesh(new THREE.Mesh(sgArmGeo, sgFrameMat), false);
+    arm.position.set(side * 0.272, 0.396, 0.142);
+    arm.rotation.y = -side * 0.31;
+
+    const earHook = registerMesh(new THREE.Mesh(sgHookGeo, sgFrameMat), false);
+    earHook.position.set(side * 0.318, 0.372, -0.028);
+    earHook.rotation.x = 0.25;
+
+    sunglassesGroup.add(frame, lens, hinge, arm, earHook);
+  }
+
+  const sgNoseBridge = registerMesh(new THREE.Mesh(sgBridgeGeo, buckleMat), false);
+  sgNoseBridge.position.set(0, 0.392, 0.334);
+  const sgBrowBar = registerMesh(new THREE.Mesh(sgBrowBarGeo, sgFrameMat), false);
+  sgBrowBar.position.set(0, 0.428, 0.33);
+  sunglassesGroup.add(sgNoseBridge, sgBrowBar);
+  headGroup.add(sunglassesGroup);
+
+  disposables.push(
+    neckGeo,
+    craniumGeo,
+    facePatchGeo,
+    earGeo,
+    hairCapGeo,
+    hairQuiffGeo,
+    templeGeo,
+    sgFrameMat,
+    sgLensMat,
+    sgFrameGeo,
+    sgLensGeo,
+    sgBridgeGeo,
+    sgBrowBarGeo,
+    sgArmGeo,
+    sgHookGeo,
+    sgHingeGeo
+  );
 
   // --- Articulated Tailored Suit Arms with White Shirt Cuffs & Sculpted Hands ---
   const sleeveGeo = new THREE.CapsuleGeometry(0.115, 0.42, 8, 14);
