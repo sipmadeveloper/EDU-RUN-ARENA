@@ -248,7 +248,9 @@ export function RaceTrackProgressBar({
                   aria-label={`Peringkat ${rank} ${p.name}${isMe ? ' (Anda)' : ''}, ${Math.round(pct)}% lintasan, ${
                     isFinished ? 'sudah finish' : `sisa ${metersLeft} meter ke finish`
                   }`}
-                  className={`relative flex items-center justify-center rounded-full font-mono font-bold text-white cursor-pointer transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] ${
+                  className={`relative flex items-center justify-center rounded-full font-mono font-bold text-white transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] ${
+                    onSelectPlayer ? 'cursor-pointer' : 'cursor-default'
+                  } ${
                     isMe
                       ? 'w-6 h-6 text-[9px] border-2 border-[#FACC15] shadow-[0_0_10px_rgba(250,204,21,0.55)] hover:scale-110'
                       : isFollowed

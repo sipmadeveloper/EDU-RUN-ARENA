@@ -1,11 +1,14 @@
 import type { WebSocket } from 'ws';
 
+export type RelayMusicTrackId = 'semangat_juara' | 'lari_ceria' | 'turbo_arena';
+
 export interface RelayRoomPatch {
   status?: 'waiting' | 'countdown' | 'playing' | 'finished';
   countdownStartMs?: number;
   startedAtMs?: number;
   finishedAtMs?: number;
   participantCount?: number;
+  musicTrack?: RelayMusicTrackId;
   updatedAtMs: number;
 }
 
@@ -111,6 +114,14 @@ function sanitizeRoomPatch(raw: unknown): RelayRoomPatch | null {
   const participantCount = clampNum(obj.participantCount, 0, 30);
   if (participantCount !== undefined) patch.participantCount = Math.round(participantCount);
 
+  if (
+    obj.musicTrack === 'semangat_juara' ||
+    obj.musicTrack === 'lari_ceria' ||
+    obj.musicTrack === 'turbo_arena'
+  ) {
+    patch.musicTrack = obj.musicTrack;
+  }
+
   return patch;
 }
 
@@ -149,7 +160,7 @@ function sanitizeParticipantPatch(roomCode: string, raw: unknown): RelayParticip
   const lane = clampNum(obj.lane, 0, 30);
   if (lane !== undefined) patch.lane = Math.round(lane);
 
-  const distance = clampNum(obj.distance, 0, 50000);
+  const distance = clampNum(obj.distance, 0, 200000);
   if (distance !== undefined) patch.distance = Number(distance.toFixed(2));
 
   const progress = clampNum(obj.progress, 0, 1);
@@ -223,6 +234,7 @@ function mergeRoomPatch(prev: RelayRoomPatch | null, next: RelayRoomPatch): Rela
     startedAtMs: next.startedAtMs ?? prev.startedAtMs,
     finishedAtMs: next.finishedAtMs ?? prev.finishedAtMs,
     participantCount: Math.max(prev.participantCount ?? 0, next.participantCount ?? 0),
+    musicTrack: next.musicTrack ?? prev.musicTrack,
     updatedAtMs: Math.max(prev.updatedAtMs, next.updatedAtMs),
   };
 }

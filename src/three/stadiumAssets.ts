@@ -189,7 +189,8 @@ export function buildOvalWallGeometry(
   midR: number,
   segments: number,
   uRepeat: number,
-  inwardFacing: boolean
+  inwardFacing: boolean,
+  skipSegment?: (sMid: number, pMid: TrackPose) => boolean
 ): THREE.BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
@@ -212,16 +213,22 @@ export function buildOvalWallGeometry(
     uvs.push(u, 1);
 
     if (i < segments) {
-      const a = i * 2;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
-      if (inwardFacing) {
-        indices.push(a, b, c);
-        indices.push(b, d, c);
-      } else {
-        indices.push(a, c, b);
-        indices.push(b, c, d);
+      const sMid = (i + 0.5) / segments;
+      const shouldSkip = skipSegment
+        ? skipSegment(sMid, evaluateStadiumOval(sMid, radius, straightLen, midR))
+        : false;
+      if (!shouldSkip) {
+        const a = i * 2;
+        const b = a + 1;
+        const c = a + 2;
+        const d = a + 3;
+        if (inwardFacing) {
+          indices.push(a, b, c);
+          indices.push(b, d, c);
+        } else {
+          indices.push(a, c, b);
+          indices.push(b, c, d);
+        }
       }
     }
   }
@@ -243,13 +250,21 @@ export function buildSteppedBowlGeometry(
   straightLen: number,
   midR: number,
   segments: number,
-  perimeterRepeat = 64
+  perimeterRepeat = 64,
+  skipSegment?: (sMid: number, pMid: TrackPose) => boolean
 ): THREE.BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
   let vertexOffset = 0;
+
+  const skipFlags: boolean[] | null = skipSegment
+    ? Array.from({ length: segments }, (_, i) => {
+        const sMid = (i + 0.5) / segments;
+        return skipSegment(sMid, evaluateStadiumOval(sMid, baseR, straightLen, midR));
+      })
+    : null;
 
   for (let t = 0; t < tierCount; t++) {
     const rIn = baseR + t * tierDepth;
@@ -266,7 +281,7 @@ export function buildSteppedBowlGeometry(
       const u = s * perimeterRepeat;
       uvs.push(u, 0, u, 0.28);
 
-      if (i < segments) {
+      if (i < segments && !(skipFlags && skipFlags[i])) {
         const a = vertexOffset + i * 2;
         const b = a + 1;
         const c = a + 2;
@@ -286,7 +301,7 @@ export function buildSteppedBowlGeometry(
       const u = s * perimeterRepeat;
       uvs.push(u, 0.28, u, 1.0);
 
-      if (i < segments) {
+      if (i < segments && !(skipFlags && skipFlags[i])) {
         const a = vertexOffset + i * 2;
         const b = a + 1;
         const c = a + 2;

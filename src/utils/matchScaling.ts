@@ -1,6 +1,8 @@
 export const MAX_MATCH_SCORE = 100;
 export const QUESTIONS_PER_LAP = 5;
-export const TRACK_UNITS_PER_QUESTION = 72;
+export const SECONDS_BETWEEN_QUESTION_GATES = 120;
+export const DEFAULT_BASE_SPEED = 3;
+export const TRACK_UNITS_PER_QUESTION = DEFAULT_BASE_SPEED * SECONDS_BETWEEN_QUESTION_GATES;
 
 export function calcTotalLaps(questionCount: number): number {
   const safeCount = Math.max(1, Math.round(questionCount || 1));
@@ -39,9 +41,16 @@ export function calcScoreFromCorrect(correctCount: number, questionCount: number
   return Number(((safeCorrect * MAX_MATCH_SCORE) / safeCount).toFixed(2));
 }
 
-export function calcTrackLength(questionCount: number): number {
+/**
+ * Computes track length so that the distance between consecutive question gates
+ * takes SECONDS_BETWEEN_QUESTION_GATES (120s) to traverse at the relaxed baseSpeed.
+ */
+export function calcTrackLength(questionCount: number, baseSpeed = DEFAULT_BASE_SPEED): number {
   const safeCount = Math.max(1, Math.round(questionCount || 1));
-  return safeCount * TRACK_UNITS_PER_QUESTION;
+  const safeSpeed = Number.isFinite(baseSpeed) && baseSpeed > 0 ? baseSpeed : DEFAULT_BASE_SPEED;
+  const totalLaps = calcTotalLaps(safeCount);
+  const gatesOnLap = calcGatesPerLap(safeCount);
+  return Math.round(totalLaps * (gatesOnLap + 1) * safeSpeed * SECONDS_BETWEEN_QUESTION_GATES);
 }
 
 export function formatScoreValue(value: number): string {

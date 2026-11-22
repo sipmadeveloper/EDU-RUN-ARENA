@@ -24,7 +24,13 @@ import {
   type MedalAttachmentHandle,
 } from '../three/medalCeremony';
 import { soundEngine } from '../audio/soundEngine';
-import { applyStudioEnvironment, createConfiguredRenderer, afterDraw } from '../three/webglGuard';
+import {
+  applyStudioEnvironment,
+  createConfiguredRenderer,
+  disposeConfiguredRenderer,
+  afterDraw,
+  cancelAfterDraw,
+} from '../three/webglGuard';
 import {
   createSceneLightingRig,
   dampThemeWeights,
@@ -226,14 +232,20 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     const initW = container.clientWidth || window.innerWidth;
     const initH = container.clientHeight || window.innerHeight;
 
-    const camera = new THREE.PerspectiveCamera(56, initW / initH, 0.2, 2400);
-    const camLookCurrent = new THREE.Vector3(-2, 3.0, 147);
-    camera.position.set(-34, 14.5, 118);
+    const camera = new THREE.PerspectiveCamera(56, initW / initH, 0.2, 3600);
+    const camLookCurrent = showcaseMode
+      ? new THREE.Vector3(-22, 14, -65)
+      : new THREE.Vector3(-2, 3.0, 147);
+    if (showcaseMode) {
+      camera.position.set(-265, 144, -496);
+    } else {
+      camera.position.set(-34, 14.5, 118);
+    }
     camera.lookAt(camLookCurrent);
 
     // 4 persistent sub-cameras + lightweight offscreen render targets for smooth 4-angle live preview
     const previewCameras = CAMERA_PRESET_LIST.map(() => {
-      const subCam = new THREE.PerspectiveCamera(54, 16 / 10, 0.2, 2400);
+      const subCam = new THREE.PerspectiveCamera(54, 16 / 10, 0.2, 3200);
       subCam.position.set(-34, 14.5, 118);
       return subCam;
     });
@@ -278,7 +290,15 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       }
     };
 
-    const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
+    let renderer: THREE.WebGLRenderer;
+    let isSoftwareGl = false;
+    try {
+      const cfg = createConfiguredRenderer(container);
+      renderer = cfg.renderer;
+      isSoftwareGl = cfg.isSoftwareGl;
+    } catch {
+      return;
+    }
     if (!isSoftwareGl && renderer.getPixelRatio() > 1.25) {
       renderer.setPixelRatio(1.25);
     }
@@ -464,10 +484,10 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           const pose = stadium.getTrackPose(p.progress, p.lane, laneCap);
           const entrance = stadium.getEntrancePose(p.lane, laneCap);
           const walkDist =
-            Math.abs(entrance.startZ - entrance.exitZ) +
+            Math.abs(entrance.exitZ - entrance.startZ) +
             Math.hypot(pose.x - entrance.startX, pose.z - entrance.exitZ);
-          const walkDuration = THREE.MathUtils.clamp(walkDist / 7.5, 3.2, 6.8);
-          const walkTurnDur = 0.45;
+          const walkDuration = THREE.MathUtils.clamp(walkDist / 24, 10.5, 14.5);
+          const walkTurnDur = 0.55;
 
           let walkInActive = false;
           let walkInElapsed = 0;
@@ -483,8 +503,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               walkInActive = true;
               walkInElapsed = 0;
             } else if (isLocal) {
-              // Local student just entered the lobby -> always experience walking out from stadium entrance
-              if (joinedAgeSec === null || joinedAgeSec < 22) {
+              // Local student just entered the lobby -> always experience walking from North tunnel across center field to Start Line
+              if (joinedAgeSec === null || joinedAgeSec < 28) {
                 walkInActive = true;
                 walkInElapsed = 0;
               }
@@ -497,7 +517,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
 
           const initX = walkInActive ? entrance.startX : pose.x;
           const initZ = walkInActive ? entrance.startZ : pose.z;
-          const initYaw = walkInActive ? Math.PI : pose.yaw;
+          const initYaw = walkInActive ? Math.atan2(0, entrance.exitZ - entrance.startZ) : pose.yaw;
           rig.root.position.set(initX, 0, initZ);
           rig.root.rotation.y = initYaw;
           scene.add(rig.root);
@@ -624,7 +644,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           });
           cachedRankById = new Map<string, number>();
           rankedPlayers.forEach((rp, idx) => cachedRankById.set(rp.id, idx + 1));
-          cachedWinnerSummaries = rankedPlayers.slice(0, 4).map((rp, idx) => ({
+          cachedWinnerSummaries = rankedPlayers.slice(0, 30).map((rp, idx) => ({
             rank: idx + 1,
             name: rp.name,
             score: rp.score,
@@ -700,6 +720,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       let anyBoostOrFinish = false;
       let localTarget: { pose: TrackPose; effect: string; finished: boolean; walkingIn: boolean } | null = null;
       let followedTarget: { pose: TrackPose; effect: string; finished: boolean; walkingIn: boolean } | null = null;
+      let activeWalkInTarget: { pose: TrackPose; elapsed: number } | null = null;
       let leaderPlayer: PlayerState | null = null;
       let leaderPose: TrackPose | null = null;
       const activeFollowedId = followedIdRef.current;
@@ -921,7 +942,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             entry.rig.root.position.set(nextX, 0, nextZ);
             entry.rig.root.rotation.y = nextYaw;
           } else {
-            // Walk smoothly from Stadium Athlete Entrance Tunnel ("PINTU MASUK ATLET") to assigned start lane
+            // Walk smoothly from North Athlete Entrance Tunnel ("PINTU MASUK ATLET") across center field to assigned start lane
             entry.walkInElapsed += dt;
             const walkDur = entry.walkInDuration;
             const turnDur = entry.walkInTurnDur;
@@ -933,16 +954,18 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             const targetZ = pose.z;
             const targetYaw = pose.yaw;
 
-            const exitDist = Math.abs(startZ - exitZ);
+            const exitDist = Math.abs(exitZ - startZ);
             const curveDist = Math.hypot(targetX - startX, targetZ - exitZ);
             const exitFrac = THREE.MathUtils.clamp(
               exitDist / Math.max(0.5, exitDist + curveDist),
-              0.14,
-              0.38
+              0.08,
+              0.2
             );
             const exitDur = walkDur * exitFrac;
-            const ctrlX = startX + 2.2;
-            const ctrlZ = targetZ + (exitZ - targetZ) * 0.14;
+            const tunnelExitYaw = Math.atan2(0, exitZ - startZ); // 0 (+Z facing straight across center field)
+            // Route cleanly through the middle of the green infield pitch (z = 0) toward the South Start Line
+            const ctrlX = startX * 0.45;
+            const ctrlZ = 0;
 
             let rx = targetX;
             let rz = targetZ;
@@ -952,7 +975,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               const u = THREE.MathUtils.clamp(entry.walkInElapsed / Math.max(0.05, exitDur), 0, 1);
               rx = startX;
               rz = THREE.MathUtils.lerp(startZ, exitZ, u);
-              rYaw = Math.PI;
+              rYaw = tunnelExitYaw;
               animMode = 'walk';
             } else if (entry.walkInElapsed < walkDur) {
               const rawU = THREE.MathUtils.clamp(
@@ -1055,6 +1078,11 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           entry.rig.bodyPivot.rotation.x += ceremonyBowAmount * 0.22;
         }
 
+        if (entry.walkInActive) {
+          if (!activeWalkInTarget || entry.walkInElapsed < activeWalkInTarget.elapsed) {
+            activeWalkInTarget = { pose, elapsed: entry.walkInElapsed };
+          }
+        }
         if (p.id === localIdRef.current) {
           localTarget = {
             pose,
@@ -1209,13 +1237,30 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         if (allowStatusOverride && !showcaseMode) {
           if (status === 'waiting' && !followedTarget) {
             if (localTarget?.walkingIn) {
-              // Follow local student cinematically from the track side as they emerge from PINTU MASUK ATLET
+              // Follow local student emerging from the grand North Athlete Tunnel & striding across center field to Start Gate
               const lp = localTarget.pose;
-              outPos.set(lp.x - 10.5, 5.2, Math.min(160.5, lp.z - 12.2));
-              outLook.set(lp.x + lp.fx * 2.2, 1.45, lp.z + lp.fz * 2.2);
-              return { fov: 54, damp: 5.2 };
+              if (lp.z < -154) {
+                outPos.set(lp.x + 11.5, 6.2, lp.z + 24.0);
+                outLook.set(lp.x, 3.2, lp.z - 4.0);
+                return { fov: 54, damp: 4.5 };
+              }
+              outPos.set(lp.x + 9.5, 6.6, lp.z - 14.5);
+              outLook.set(lp.x * 0.4, 2.2, lp.z + 26.0);
+              return { fov: 54, damp: 4.8 };
             }
-            // Wide broadcast shot framing BOTH PINTU MASUK ATLET (x=-12, z=168) AND the full 30-lane Start Line (x=0)
+            if (!localTarget && activeWalkInTarget) {
+              // Teacher broadcast camera follows newly-joining athlete emerging from North tunnel across the center pitch
+              const wp = activeWalkInTarget.pose;
+              if (wp.z < -150) {
+                outPos.set(wp.x + 16.5, 9.8, wp.z + 32.0);
+                outLook.set(wp.x, 3.6, wp.z - 5.0);
+                return { fov: 54, damp: 4.2 };
+              }
+              outPos.set(wp.x + 22.0, 13.5, wp.z + 24.0);
+              outLook.set(wp.x, 2.2, wp.z + 4.0);
+              return { fov: 54, damp: 4.2 };
+            }
+            // Wide broadcast shot framing the 30-lane Start Line and Start Gate
             outPos.set(startPose.x - 34 + Math.sin(elapsed * 0.22) * 4.5, 14.5, startPose.z - 23.75);
             outLook.set(startPose.x - 2, 3.0, startPose.z + 5.25);
             return { fov: 56, damp: 3.6 };
@@ -1265,10 +1310,16 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         // 1) CAM 1 — Udara Stadion (Aerial Wide Broadcast / Elevated Follow Cam)
         if (preset === 'broadcast') {
           if (showcaseMode && !followedTarget) {
-            const camOrbitAngle = elapsed * 0.12 - 0.52;
-            outPos.set(Math.sin(camOrbitAngle) * 515, 112, Math.cos(camOrbitAngle) * 335);
-            outLook.set(0, 16, 0);
-            return { fov: 54, damp: 3.2 };
+            // Sweeping 360° stadium-complex tour showcasing every exterior side out to the outer perimeter fence:
+            // Grand Front Gate, Lined Shade Trees, Batako Yard, 360° Asphalt Ring Road, Rear Parking & Packed Stands!
+            const camOrbitAngle = elapsed * 0.088 + Math.PI - 0.38;
+            outPos.set(
+              Math.sin(camOrbitAngle) * 715,
+              144 + Math.sin(camOrbitAngle * 2) * 34,
+              Math.cos(camOrbitAngle) * 535
+            );
+            outLook.set(Math.sin(camOrbitAngle) * 55, 14, Math.cos(camOrbitAngle) * 70);
+            return { fov: 56, damp: 3.0 };
           }
           if (followedTarget) {
             const focus = followedTarget.pose;
@@ -1531,6 +1582,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       disposed = true;
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      cancelAfterDraw(renderer);
       resizeObs.disconnect();
       unsubscribeLed();
       presenterRig.dispose();
@@ -1549,10 +1601,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       stadium.dispose();
       lightingRig.dispose();
       disposeEnv();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === container) {
-        container.removeChild(renderer.domElement);
-      }
+      disposeConfiguredRenderer(renderer, container);
     };
   }, [questionCount, showcaseMode, measurePipSlots]);
 

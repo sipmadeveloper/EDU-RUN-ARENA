@@ -114,6 +114,7 @@ export interface LiveFirebaseRoom {
   countdownStartMs: number;
   startedAtMs: number;
   finishedAtMs: number;
+  musicTrack?: 'semangat_juara' | 'lari_ceria' | 'turbo_arena';
   createdAtIso: string;
 }
 
@@ -490,7 +491,7 @@ function parseRoomDoc(id: string, data: Record<string, unknown>): LiveFirebaseRo
     totalLaps: Number(data.totalLaps || calcTotalLaps(questionCount)),
     pointsPerQuestion: Number(data.pointsPerQuestion || calcPointsPerQuestion(questionCount)),
     maxScore: MAX_MATCH_SCORE,
-    trackLength: calcTrackLength(questionCount),
+    trackLength: calcTrackLength(questionCount, settings.baseSpeed),
     questions: rawQuestions,
     participantCount: Number(data.participantCount || 0),
     countdownStartMs,
@@ -717,6 +718,15 @@ export async function listTeacherRooms(ownerId: string): Promise<RoomSummary[]> 
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
   }
+}
+
+export function broadcastRoomMusicTrack(
+  roomCode: string,
+  musicTrack: 'semangat_juara' | 'lari_ceria' | 'turbo_arena'
+): void {
+  const code = normalizeRoomCode(roomCode);
+  if (code.length !== 6) return;
+  publishRelayRoomPatch(code, { musicTrack });
 }
 
 export async function startFirebaseRoom(roomCode: string, participantCount?: number): Promise<void> {
@@ -1227,18 +1237,19 @@ export function evaluateParticipantPhysics(
 
   const trackLength = Math.max(10, room.trackLength);
   const totalQuestions = Math.max(1, room.questionCount);
-  const segmentLen = trackLength / totalQuestions;
-  const nextGateDist =
-    p.answeredCount < totalQuestions
-      ? Math.min(trackLength - 0.5, calcQuestionGateProgress(p.answeredCount, totalQuestions) * trackLength + 4)
-      : trackLength;
+  // Keep runner smoothly jogging while reading/answering the current question gate;
+  // only prevent crossing the subsequent gate (or finish line) before answering.
+  const nextGateBoundaryDist =
+    p.answeredCount + 1 < totalQuestions
+      ? Math.max(
+          calcQuestionGateProgress(p.answeredCount, totalQuestions) * trackLength + 8,
+          calcQuestionGateProgress(p.answeredCount + 1, totalQuestions) * trackLength - 2
+        )
+      : trackLength - 2;
   const maxAllowedDist =
     p.answeredCount >= totalQuestions
       ? trackLength
-      : Math.max(
-          nextGateDist,
-          Math.min(trackLength - 0.5, (p.answeredCount + 0.96) * segmentLen)
-        );
+      : Math.min(trackLength - 0.5, nextGateBoundaryDist);
 
   const raceStartMs = room.startedAtMs > 0 ? room.startedAtMs : p.startedAt || nowMs;
   const anchorMs =
@@ -1387,7 +1398,7 @@ export function prepareParticipantAnswer(params: {
   } else {
     nextEffectState = 'penalty';
     nextEffectExpiresAt = now + room.settings.penaltyDuration * 1000;
-    nextSpeed = Number((room.settings.baseSpeed * 0.25).toFixed(2));
+    nextSpeed = Number((room.settings.baseSpeed * 0.42).toFixed(2));
   }
 
   const nextProgress = Math.max(0, Math.min(1, Number((nextDistance / room.trackLength).toFixed(6))));
@@ -1688,9 +1699,13 @@ function mergeRoomMonotonic(
       startedAtMs: current.startedAtMs || incoming.startedAtMs,
       finishedAtMs: current.finishedAtMs || incoming.finishedAtMs,
       participantCount: Math.max(current.participantCount, incoming.participantCount),
+      musicTrack: incoming.musicTrack ?? current.musicTrack,
     };
   }
-  return incoming;
+  return {
+    ...incoming,
+    musicTrack: incoming.musicTrack ?? current.musicTrack,
+  };
 }
 
 function applyRelayRoomPatch(
@@ -1705,13 +1720,15 @@ function applyRelayRoomPatch(
   const nextStarted = patch.startedAtMs ?? current.startedAtMs;
   const nextFinished = patch.finishedAtMs ?? current.finishedAtMs;
   const nextCount = Math.max(current.participantCount, patch.participantCount ?? 0);
+  const nextMusicTrack = patch.musicTrack ?? current.musicTrack;
 
   if (
     nextStatus === current.status &&
     nextCountdown === current.countdownStartMs &&
     nextStarted === current.startedAtMs &&
     nextFinished === current.finishedAtMs &&
-    nextCount === current.participantCount
+    nextCount === current.participantCount &&
+    nextMusicTrack === current.musicTrack
   ) {
     return null;
   }
@@ -1723,6 +1740,7 @@ function applyRelayRoomPatch(
     startedAtMs: nextStarted,
     finishedAtMs: nextFinished,
     participantCount: nextCount,
+    musicTrack: nextMusicTrack,
   };
 }
 

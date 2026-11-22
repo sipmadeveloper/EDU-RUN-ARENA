@@ -27,6 +27,7 @@ import {
 } from './stadiumAssets';
 import { createPerimeterLedController } from './perimeterLedController';
 import { getCachedStadiumLedConfig, type StadiumLedConfig } from '../services/stadiumLedStore';
+import { createStadiumExteriorGrounds } from './createStadiumExteriorGrounds';
 
 export type { TrackPose };
 
@@ -116,7 +117,7 @@ export function createStadium(
   const midR = innerR + trackWidth / 2; // 141.75
 
   // 1. Exterior stadium plaza / surrounding meadow ground
-  const extGeo = new THREE.PlaneGeometry(3600, 3600);
+  const extGeo = new THREE.PlaneGeometry(5400, 5400);
   const extMat = new THREE.MeshStandardMaterial({
     color: initialPreset.extGroundColor.clone(),
     roughness: 0.95,
@@ -387,165 +388,211 @@ export function createStadium(
     sfLineMat
   );
 
-  // 4b. STADIUM ATHLETE ENTRANCE TUNNEL PORTAL ("PINTU MASUK ATLET") — behind Start Line on outer grandstand side
-  const entranceCenterX = -12.0;
-  const entranceBackZ = outerR + 4.88; // 168.38 (cleanly in front of lowerLedMesh at 168.62)
-  const entranceDepth = 3.0;
-  const entranceMidZ = entranceBackZ - entranceDepth / 2; // 166.88
-  const entranceFrontZ = entranceBackZ - entranceDepth; // 165.38
+  // 4b. GRAND STADIUM ATHLETE ENTRANCE TUNNEL ("PINTU MASUK ATLET") — directly opposite the Start Gate (North side, facing +Z)
+  const TUNNEL_CUTOUT_HALF_W = 14.0;
+  const cutoutEdgeHalfW = Math.abs(
+    evaluateStadiumOval(118 / 240, outerR + 5.4, straightLen, midR).x
+  ); // exact horizontal edge of the 4 skipped lower-tier segments (~14.09m)
+  const entranceCenterX = 0;
+  const entranceFrontZ = -(outerR + 5.4) + 0.5; // -168.4 (flush with lower grandstand front edge)
+  const entranceBackZ = -(outerR + 5.4 + 6 * 4.8) + 0.6; // -197.1 (deep under VIP ring)
+  const entranceDepth = Math.abs(entranceFrontZ - entranceBackZ); // ~28.7m
+  const entranceMidZ = (entranceFrontZ + entranceBackZ) / 2; // -182.75
 
   const entranceGroup = new THREE.Group();
   entranceGroup.position.set(entranceCenterX, 0, entranceMidZ);
 
   const entranceConcreteMat = new THREE.MeshStandardMaterial({
     color: 0x0d2147,
-    roughness: 0.56,
-    metalness: 0.32,
+    roughness: 0.52,
+    metalness: 0.34,
   });
   const entranceInteriorMat = new THREE.MeshStandardMaterial({
-    color: 0x030712,
-    roughness: 0.94,
-    metalness: 0.04,
+    color: 0x040b18,
+    roughness: 0.88,
+    metalness: 0.08,
+  });
+  const entranceWallPanelMat = new THREE.MeshStandardMaterial({
+    color: 0x132b57,
+    roughness: 0.42,
+    metalness: 0.48,
   });
   const entranceRoofMat = new THREE.MeshStandardMaterial({
     color: 0x162c56,
-    roughness: 0.34,
-    metalness: 0.62,
+    roughness: 0.32,
+    metalness: 0.64,
   });
   const entranceLightMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe });
+  const entranceAccentLedMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const entranceOrangeLedMat = new THREE.MeshBasicMaterial({ color: 0xff6b1a });
   const entranceCarpetMat = new THREE.MeshStandardMaterial({
     color: 0x1d4ed8,
-    roughness: 0.86,
-    metalness: 0.02,
+    roughness: 0.84,
+    metalness: 0.04,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
   const entranceCarpetTrimMat = new THREE.MeshStandardMaterial({
     color: 0xfacc15,
-    roughness: 0.42,
-    metalness: 0.48,
+    roughness: 0.4,
+    metalness: 0.52,
     polygonOffset: true,
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -2,
   });
+
   const entranceSignCanvas = document.createElement('canvas');
-  entranceSignCanvas.width = 1024;
-  entranceSignCanvas.height = 160;
+  entranceSignCanvas.width = 1536;
+  entranceSignCanvas.height = 256;
   const eCtx = entranceSignCanvas.getContext('2d')!;
-  const eGrad = eCtx.createLinearGradient(0, 0, 1024, 0);
+  const eGrad = eCtx.createLinearGradient(0, 0, 1536, 0);
   eGrad.addColorStop(0, '#07142E');
-  eGrad.addColorStop(0.5, '#102B63');
+  eGrad.addColorStop(0.5, '#102F6D');
   eGrad.addColorStop(1, '#07142E');
   eCtx.fillStyle = eGrad;
-  eCtx.fillRect(0, 0, 1024, 160);
+  eCtx.fillRect(0, 0, 1536, 256);
   eCtx.fillStyle = '#FF6B1A';
-  eCtx.fillRect(0, 0, 1024, 16);
+  eCtx.fillRect(0, 0, 1536, 22);
+  eCtx.fillStyle = '#FACC15';
+  eCtx.fillRect(0, 236, 1536, 20);
   eCtx.strokeStyle = '#FACC15';
-  eCtx.lineWidth = 8;
-  eCtx.strokeRect(8, 20, 1008, 132);
+  eCtx.lineWidth = 10;
+  eCtx.strokeRect(14, 28, 1508, 202);
   eCtx.textAlign = 'center';
   eCtx.textBaseline = 'middle';
   eCtx.fillStyle = '#FACC15';
-  eCtx.font = '800 22px sans-serif';
-  eCtx.fillText('EDU RUN ARENA 3D · ATHLETE TUNNEL', 512, 48);
+  eCtx.font = '800 32px sans-serif';
+  eCtx.fillText('EDU RUN ARENA 3D · GERBANG ATLET INTERNASIONAL', 768, 76);
   eCtx.fillStyle = '#FFFFFF';
-  eCtx.font = '900 58px sans-serif';
-  eCtx.fillText('PINTU MASUK ATLET', 512, 108, 920);
+  eCtx.font = '900 84px sans-serif';
+  eCtx.fillText('PINTU MASUK ATLET', 768, 168, 1380);
   const entranceSignTex = new THREE.CanvasTexture(entranceSignCanvas);
   entranceSignTex.colorSpace = THREE.SRGBColorSpace;
   entranceSignTex.anisotropy = maxAnisotropy;
   const entranceSignMat = new THREE.MeshStandardMaterial({
     map: entranceSignTex,
-    roughness: 0.28,
+    roughness: 0.26,
     emissive: 0x0f2554,
-    emissiveIntensity: 0.45,
+    emissiveIntensity: 0.5,
   });
 
-  // Recessed dark tunnel opening back wall
-  const tunnelBackGeo = new THREE.BoxGeometry(8.8, 4.65, 0.25);
+  // Grand recessed tunnel dimensions: 16.0m wide x 7.8m tall opening, 28.7m deep corridor facing +Z
+  const tunnelOpenW = 16.0;
+  const tunnelOpenH = 7.8;
+
+  // Deep tunnel rear wall with architectural recessed double-gate backdrop
+  const tunnelBackGeo = new THREE.BoxGeometry(tunnelOpenW + 0.6, tunnelOpenH + 0.4, 0.5);
   const tunnelBack = new THREE.Mesh(tunnelBackGeo, entranceInteriorMat);
-  tunnelBack.position.set(0, 2.325, entranceDepth / 2 - 0.12);
+  tunnelBack.position.set(0, (tunnelOpenH + 0.4) / 2, -entranceDepth / 2 + 0.25);
 
-  // Left & right structural tunnel piers (flush at y = 0)
-  const tunnelPierGeo = new THREE.BoxGeometry(1.5, 5.2, entranceDepth);
+  // Backlit inner tunnel portal frame at the far rear end
+  const rearFrameGeo = new THREE.BoxGeometry(11.6, 5.8, 0.35);
+  const rearFrame = new THREE.Mesh(rearFrameGeo, entranceWallPanelMat);
+  rearFrame.position.set(0, 2.9, -entranceDepth / 2 + 0.6);
+  const rearLightGeo = new THREE.BoxGeometry(11.2, 0.32, 0.2);
+  const rearLight = new THREE.Mesh(rearLightGeo, entranceAccentLedMat);
+  rearLight.position.set(0, 5.95, -entranceDepth / 2 + 0.72);
+
+  // Monumental left & right structural tunnel piers (flush at y = 0, extending full corridor depth)
+  const tunnelPierGeo = new THREE.BoxGeometry(3.2, 9.8, entranceDepth);
   const pierL = new THREE.Mesh(tunnelPierGeo, entranceConcreteMat);
-  pierL.position.set(-4.95, 2.6, 0);
+  pierL.position.set(-(tunnelOpenW / 2 + 1.6), 4.9, 0);
   const pierR = new THREE.Mesh(tunnelPierGeo, entranceConcreteMat);
-  pierR.position.set(4.95, 2.6, 0);
+  pierR.position.set(tunnelOpenW / 2 + 1.6, 4.9, 0);
 
-  // Inner dark tunnel sidewalls
-  const tunnelInnerSideGeo = new THREE.BoxGeometry(0.18, 4.65, entranceDepth - 0.2);
+  // Dark acoustic interior tunnel sidewalls
+  const tunnelInnerSideGeo = new THREE.BoxGeometry(0.28, tunnelOpenH, entranceDepth - 0.5);
   const sideL = new THREE.Mesh(tunnelInnerSideGeo, entranceInteriorMat);
-  sideL.position.set(-4.12, 2.325, 0.05);
+  sideL.position.set(-tunnelOpenW / 2 + 0.14, tunnelOpenH / 2, 0.1);
   const sideR = new THREE.Mesh(tunnelInnerSideGeo, entranceInteriorMat);
-  sideR.position.set(4.12, 2.325, 0.05);
+  sideR.position.set(tunnelOpenW / 2 - 0.14, tunnelOpenH / 2, 0.1);
 
-  // Gold accent trim pillars on front face
-  const trimColGeo = new THREE.BoxGeometry(0.36, 5.1, 0.36);
+  // Stepped gold & illuminated vertical accent columns on the front (+Z) portal mouth
+  const trimColGeo = new THREE.BoxGeometry(0.65, 9.5, 0.75);
   const entranceTrimL = new THREE.Mesh(trimColGeo, gantryGoldMat);
-  entranceTrimL.position.set(-4.45, 2.55, -entranceDepth / 2 - 0.06);
+  entranceTrimL.position.set(-(tunnelOpenW / 2 + 0.32), 4.75, entranceDepth / 2 + 0.18);
   const entranceTrimR = new THREE.Mesh(trimColGeo, gantryGoldMat);
-  entranceTrimR.position.set(4.45, 2.55, -entranceDepth / 2 - 0.06);
+  entranceTrimR.position.set(tunnelOpenW / 2 + 0.32, 4.75, entranceDepth / 2 + 0.18);
 
-  // Vaulted canopy roof + top parapet
-  const tunnelRoofGeo = new THREE.BoxGeometry(11.6, 1.35, entranceDepth + 0.5);
+  const frontLedStripGeo = new THREE.BoxGeometry(0.32, 8.8, 0.24);
+  const frontLedL = new THREE.Mesh(frontLedStripGeo, entranceOrangeLedMat);
+  frontLedL.position.set(-(tunnelOpenW / 2 + 2.55), 4.8, entranceDepth / 2 + 0.1);
+  const frontLedR = new THREE.Mesh(frontLedStripGeo, entranceOrangeLedMat);
+  frontLedR.position.set(tunnelOpenW / 2 + 2.55, 4.8, entranceDepth / 2 + 0.1);
+
+  // Grand cantilevered portal roof/lintel slab (leaves full open sky/void headroom y = 10.2..20.6 above it!)
+  const tunnelRoofGeo = new THREE.BoxGeometry(tunnelOpenW + 7.2, 2.35, entranceDepth + 1.4);
   const tunnelRoof = new THREE.Mesh(tunnelRoofGeo, entranceRoofMat);
-  tunnelRoof.position.set(0, 5.25, -0.1);
+  tunnelRoof.position.set(0, tunnelOpenH + 1.175, 0.45);
 
-  // Overhead recessed tunnel LED ceiling strips illuminating emerging athletes
-  const tunnelLightGeo = new THREE.BoxGeometry(7.6, 0.08, 0.38);
-  const tunnelLight1 = new THREE.Mesh(tunnelLightGeo, entranceLightMat);
-  tunnelLight1.position.set(0, 4.55, -0.75);
-  const tunnelLight2 = new THREE.Mesh(tunnelLightGeo, entranceLightMat);
-  tunnelLight2.position.set(0, 4.55, 0.45);
+  // Crown accent strip along the top edge of the portal fascia
+  const crownTrimGeo = new THREE.BoxGeometry(tunnelOpenW + 7.4, 0.28, 0.4);
+  const crownTrim = new THREE.Mesh(crownTrimGeo, gantryGoldMat);
+  crownTrim.position.set(0, tunnelOpenH + 2.38, entranceDepth / 2 + 1.12);
 
-  // Front illuminated fascia sign facing -Z toward the track & cameras
-  const entranceSignGeo = new THREE.PlaneGeometry(9.6, 1.45);
+  // Overhead recessed tunnel LED ceiling light bars + glowing wall ribs illuminating emerging athletes
+  const tunnelLightGeo = new THREE.BoxGeometry(tunnelOpenW - 2.4, 0.14, 0.65);
+  const sideRibLedGeo = new THREE.BoxGeometry(0.16, tunnelOpenH - 1.2, 0.28);
+  const lightBarOffsets = [-10.5, -5.2, 0.1, 5.4, 10.6];
+  for (const lz of lightBarOffsets) {
+    const ceilingBar = new THREE.Mesh(tunnelLightGeo, entranceLightMat);
+    ceilingBar.position.set(0, tunnelOpenH - 0.08, lz);
+    const ribL = new THREE.Mesh(sideRibLedGeo, entranceAccentLedMat);
+    ribL.position.set(-tunnelOpenW / 2 + 0.34, tunnelOpenH / 2 - 0.1, lz);
+    const ribR = new THREE.Mesh(sideRibLedGeo, entranceAccentLedMat);
+    ribR.position.set(tunnelOpenW / 2 - 0.34, tunnelOpenH / 2 - 0.1, lz);
+    entranceGroup.add(ceilingBar, ribL, ribR);
+  }
+
+  // Front illuminated monumental fascia sign facing +Z straight toward the center field & Start Gate
+  const entranceSignGeo = new THREE.PlaneGeometry(19.6, 2.55);
   const entranceSign = new THREE.Mesh(entranceSignGeo, entranceSignMat);
-  entranceSign.position.set(0, 5.25, -(entranceDepth + 0.5) / 2 - 0.12);
-  entranceSign.rotation.y = Math.PI;
+  entranceSign.position.set(0, tunnelOpenH + 1.18, entranceDepth / 2 + 1.2);
 
-  // Athlete entry carpet runner from inside the tunnel out to the outer track curb
-  const carpetLen = entranceBackZ - (outerR + 0.45); // ~4.43m
-  const carpetCenterLocalZ = entranceBackZ - carpetLen / 2 - entranceMidZ;
-  const entranceCarpetGeo = new THREE.BoxGeometry(7.2, 0.03, carpetLen);
+  // Ceremonial royal-blue & gold athlete carpet runner from deep inside tunnel out to North track curb (-outerR - 0.3)
+  const carpetEndWorldZ = -outerR - 0.3; // -163.8
+  const carpetStartWorldZ = entranceBackZ + 1.0; // -196.1
+  const carpetLen = carpetEndWorldZ - carpetStartWorldZ; // ~32.3m
+  const carpetCenterLocalZ = (carpetStartWorldZ + carpetEndWorldZ) / 2 - entranceMidZ;
+  const entranceCarpetGeo = new THREE.BoxGeometry(11.6, 0.036, carpetLen);
   const entranceCarpetMesh = new THREE.Mesh(entranceCarpetGeo, entranceCarpetMat);
-  entranceCarpetMesh.position.set(0, 0.05, carpetCenterLocalZ);
-  const entranceCarpetTrimGeo = new THREE.BoxGeometry(0.28, 0.032, carpetLen);
+  entranceCarpetMesh.position.set(0, 0.052, carpetCenterLocalZ);
+  const entranceCarpetTrimGeo = new THREE.BoxGeometry(0.42, 0.04, carpetLen);
   const carpetTrimL = new THREE.Mesh(entranceCarpetTrimGeo, entranceCarpetTrimMat);
-  carpetTrimL.position.set(-3.72, 0.052, carpetCenterLocalZ);
+  carpetTrimL.position.set(-6.02, 0.054, carpetCenterLocalZ);
   const carpetTrimR = new THREE.Mesh(entranceCarpetTrimGeo, entranceCarpetTrimMat);
-  carpetTrimR.position.set(3.72, 0.052, carpetCenterLocalZ);
+  carpetTrimR.position.set(6.02, 0.054, carpetCenterLocalZ);
 
-  // Flanking metallic stanchion bollards along the entry apron
-  const bollardGeo = new THREE.CylinderGeometry(0.11, 0.14, 0.95, 10);
-  const bollardCapGeo = new THREE.SphereGeometry(0.14, 10, 8);
-  const bollardPositions: Array<[number, number]> = [
-    [-4.1, entranceFrontZ - 0.55 - entranceMidZ],
-    [-4.1, entranceFrontZ - 1.45 - entranceMidZ],
-    [4.1, entranceFrontZ - 0.55 - entranceMidZ],
-    [4.1, entranceFrontZ - 1.45 - entranceMidZ],
-  ];
-  for (const [bx, bz] of bollardPositions) {
-    const post = new THREE.Mesh(bollardGeo, gantrySteelMat);
-    post.position.set(bx, 0.475, bz);
-    const cap = new THREE.Mesh(bollardCapGeo, gantryGoldMat);
-    cap.position.set(bx, 0.98, bz);
-    entranceGroup.add(post, cap);
+  // Flanking metallic stanchion bollards along the North entry apron
+  const bollardGeo = new THREE.CylinderGeometry(0.14, 0.18, 1.15, 10);
+  const bollardCapGeo = new THREE.SphereGeometry(0.18, 10, 8);
+  const bollardWorldZs = [entranceFrontZ + 1.1, entranceFrontZ + 2.45, entranceFrontZ + 3.8];
+  for (const bzWorld of bollardWorldZs) {
+    const bz = bzWorld - entranceMidZ;
+    for (const bx of [-6.65, 6.65]) {
+      const post = new THREE.Mesh(bollardGeo, gantrySteelMat);
+      post.position.set(bx, 0.575, bz);
+      const cap = new THREE.Mesh(bollardCapGeo, gantryGoldMat);
+      cap.position.set(bx, 1.18, bz);
+      entranceGroup.add(post, cap);
+    }
   }
 
   entranceGroup.add(
     tunnelBack,
+    rearFrame,
+    rearLight,
     pierL,
     pierR,
     sideL,
     sideR,
     entranceTrimL,
     entranceTrimR,
+    frontLedL,
+    frontLedR,
     tunnelRoof,
-    tunnelLight1,
-    tunnelLight2,
+    crownTrim,
     entranceSign,
     entranceCarpetMesh,
     carpetTrimL,
@@ -555,18 +602,26 @@ export function createStadium(
   disposables.push(
     entranceConcreteMat,
     entranceInteriorMat,
+    entranceWallPanelMat,
     entranceRoofMat,
     entranceLightMat,
+    entranceAccentLedMat,
+    entranceOrangeLedMat,
     entranceCarpetMat,
     entranceCarpetTrimMat,
     entranceSignTex,
     entranceSignMat,
     tunnelBackGeo,
+    rearFrameGeo,
+    rearLightGeo,
     tunnelPierGeo,
     tunnelInnerSideGeo,
     trimColGeo,
+    frontLedStripGeo,
     tunnelRoofGeo,
+    crownTrimGeo,
     tunnelLightGeo,
+    sideRibLedGeo,
     entranceSignGeo,
     entranceCarpetGeo,
     entranceCarpetTrimGeo,
@@ -1018,6 +1073,7 @@ export function createStadium(
   );
 
   // 1) Lower Grandstand Bowl + Full 360° Dynamic Perimeter LED Ribbon Screen along Lower Barrier
+  //    Carved cleanly above the North Athlete Entrance Tunnel (no Tier-1 seats/spectators; Tier 2 above remains intact!)
   const lowerBaseR = outerR + 5.4; // 168.9
   const lowerBaseY = 2.4;
   const lowerTierCount = 6;
@@ -1026,12 +1082,35 @@ export function createStadium(
   const lowerEndR = lowerBaseR + lowerTierCount * lowerTierDepth; // 197.7
   const lowerEndY = lowerBaseY + lowerTierCount * lowerTierStepH; // 13.2
 
-  // Dark metallic LED cabinet frame wrapping 360° along the bottom grandstand barrier
-  const lowerWallGeo = buildOvalWallGeometry(lowerBaseR, 0.0, lowerBaseY, straightLen, midR, 240, 1, true);
+  const isNorthEntranceCutout = (_sMid: number, pMid: TrackPose) =>
+    pMid.z < -innerR && Math.abs(pMid.x) < TUNNEL_CUTOUT_HALF_W;
+
+  // Dark metallic LED cabinet frame wrapping along the bottom grandstand barrier (open at North Athlete Tunnel)
+  const lowerWallGeo = buildOvalWallGeometry(
+    lowerBaseR,
+    0.0,
+    lowerBaseY,
+    straightLen,
+    midR,
+    240,
+    1,
+    true,
+    isNorthEntranceCutout
+  );
   const lowerWall = new THREE.Mesh(lowerWallGeo, ledBezelMat);
 
-  // Full 360° HD Lower-Tribune LED Perimeter Screen (Running Text & Rotating Sponsor Images)
-  const lowerLedGeo = buildOvalWallGeometry(lowerBaseR - 0.28, 0.22, lowerBaseY - 0.16, straightLen, midR, 240, 1, true);
+  // HD Lower-Tribune LED Perimeter Screen (open cleanly across the North Athlete Entrance Tunnel)
+  const lowerLedGeo = buildOvalWallGeometry(
+    lowerBaseR - 0.28,
+    0.22,
+    lowerBaseY - 0.16,
+    straightLen,
+    midR,
+    240,
+    1,
+    true,
+    isNorthEntranceCutout
+  );
   const lowerLedMesh = new THREE.Mesh(lowerLedGeo, perimeterLed.material);
 
   const lowerBowlGeo = buildSteppedBowlGeometry(
@@ -1043,12 +1122,57 @@ export function createStadium(
     straightLen,
     midR,
     240,
-    72
+    72,
+    isNorthEntranceCutout
   );
   const lowerBowl = new THREE.Mesh(lowerBowlGeo, seatBowlMat);
   lowerBowl.receiveShadow = false;
-  stadiumGroup.add(lowerWall, lowerLedMesh, lowerBowl);
-  disposables.push(lowerWallGeo, lowerLedGeo, lowerBowlGeo);
+
+  // Architectural cheek walls & rear alcove enclosure sealing the Tier-1 cutout around the open tunnel bay
+  const bayDepth = lowerEndR - lowerBaseR + 0.6; // ~29.4m
+  const bayMidZ = -(lowerBaseR + lowerEndR) / 2 - 0.2;
+  const cheekWallGeo = new THREE.BoxGeometry(0.9, lowerEndY + 0.6, bayDepth);
+  const cheekL = new THREE.Mesh(cheekWallGeo, stepFrontMat);
+  cheekL.position.set(-(cutoutEdgeHalfW + 0.45), (lowerEndY + 0.6) / 2, bayMidZ);
+  const cheekR = new THREE.Mesh(cheekWallGeo, stepFrontMat);
+  cheekR.position.set(cutoutEdgeHalfW + 0.45, (lowerEndY + 0.6) / 2, bayMidZ);
+
+  const cheekRailGeo = new THREE.BoxGeometry(0.24, 1.15, bayDepth);
+  const cheekRailL = new THREE.Mesh(cheekRailGeo, gantryGoldMat);
+  cheekRailL.position.set(-(cutoutEdgeHalfW + 0.45), lowerEndY + 1.15, bayMidZ);
+  const cheekRailR = new THREE.Mesh(cheekRailGeo, gantryGoldMat);
+  cheekRailR.position.set(cutoutEdgeHalfW + 0.45, lowerEndY + 1.15, bayMidZ);
+
+  // Solid architectural rear wall beneath the VIP ring so there is no gap behind the open Tier-1 bay
+  const bayRearWallGeo = new THREE.BoxGeometry(cutoutEdgeHalfW * 2 + 1.8, lowerEndY + 0.4, 0.9);
+  const bayRearWall = new THREE.Mesh(bayRearWallGeo, tierMat);
+  bayRearWall.position.set(0, (lowerEndY + 0.4) / 2, -(lowerEndR + 0.4));
+
+  // Concourse deck apron under the open Tier-1 bay
+  const bayFloorGeo = new THREE.BoxGeometry(cutoutEdgeHalfW * 2 + 1.2, 0.08, bayDepth + 1.0);
+  const bayFloor = new THREE.Mesh(bayFloorGeo, stepFrontMat);
+  bayFloor.position.set(0, 0.02, bayMidZ);
+
+  stadiumGroup.add(
+    lowerWall,
+    lowerLedMesh,
+    lowerBowl,
+    cheekL,
+    cheekR,
+    cheekRailL,
+    cheekRailR,
+    bayRearWall,
+    bayFloor
+  );
+  disposables.push(
+    lowerWallGeo,
+    lowerLedGeo,
+    lowerBowlGeo,
+    cheekWallGeo,
+    cheekRailGeo,
+    bayRearWallGeo,
+    bayFloorGeo
+  );
 
   // 2) VIP Hospitality Suites & Broadcast Skybox Ring (between Lower & Upper Bowl)
   const vipR = lowerEndR + 0.4; // 198.1
@@ -1126,6 +1250,18 @@ export function createStadium(
     const pMid = evaluateStadiumOval(s, extWallR + 4.8, straightLen, midR);
     const radialYaw = Math.atan2(-pMid.fz, pMid.fx);
 
+    // Clear exoskeleton buttresses right in front of the single attached North Main Gate
+    const inMainGateZone = pMid.z < -extWallR + 12 && Math.abs(pMid.x) < 18.5;
+    if (inMainGateZone) {
+      archDummy.position.set(0, -100, 0);
+      archDummy.scale.set(0, 0, 0);
+      archDummy.updateMatrix();
+      plinthInst.setMatrixAt(i, archDummy.matrix);
+      buttressInst.setMatrixAt(i, archDummy.matrix);
+      ribStripInst.setMatrixAt(i, archDummy.matrix);
+      continue;
+    }
+
     archDummy.position.set(pBase.x, 1.6, pBase.z);
     archDummy.rotation.set(0, radialYaw, 0);
     archDummy.scale.set(1, 1, 1);
@@ -1150,33 +1286,213 @@ export function createStadium(
   stadiumGroup.add(plinthInst, buttressInst, ribStripInst);
   disposables.push(buttressGeo, plinthGeo, ribStripGeo);
 
-  // 7) 4 Monumental Stadium Entrance Gate Pavilions (South, East, North, West)
-  const gatePillarGeo = new THREE.BoxGeometry(3.8, 17.5, 4.4);
-  const gateHeaderGeo = new THREE.BoxGeometry(34, 4.2, 5.2);
-  const gateStepGeo = new THREE.BoxGeometry(36, 1.4, 8.0);
-  const gateLogoGeo = new THREE.BoxGeometry(28, 2.0, 0.6);
-  disposables.push(gatePillarGeo, gateHeaderGeo, gateStepGeo, gateLogoGeo);
+  // 7) SINGLE Monumental Exterior Stadium Main Gate — attached flush to the stadium building with metallic gate fence & double doors
+  const extGateSignCanvas = document.createElement('canvas');
+  extGateSignCanvas.width = 1536;
+  extGateSignCanvas.height = 256;
+  const gCtx = extGateSignCanvas.getContext('2d')!;
+  const gGrad = gCtx.createLinearGradient(0, 0, 1536, 0);
+  gGrad.addColorStop(0, '#07142E');
+  gGrad.addColorStop(0.5, '#112E6B');
+  gGrad.addColorStop(1, '#07142E');
+  gCtx.fillStyle = gGrad;
+  gCtx.fillRect(0, 0, 1536, 256);
+  gCtx.fillStyle = '#FF6B1A';
+  gCtx.fillRect(0, 0, 1536, 20);
+  gCtx.fillStyle = '#FACC15';
+  gCtx.fillRect(0, 236, 1536, 20);
+  gCtx.strokeStyle = '#FACC15';
+  gCtx.lineWidth = 8;
+  gCtx.strokeRect(14, 28, 1508, 200);
+  gCtx.textAlign = 'center';
+  gCtx.textBaseline = 'middle';
+  gCtx.fillStyle = '#FACC15';
+  gCtx.font = '800 32px sans-serif';
+  gCtx.fillText('EDU RUN ARENA 3D · STADION INTERNASIONAL', 768, 76);
+  gCtx.fillStyle = '#FFFFFF';
+  gCtx.font = '900 80px sans-serif';
+  gCtx.fillText('GERBANG UTAMA STADION', 768, 166, 1380);
+  const extGateSignTex = new THREE.CanvasTexture(extGateSignCanvas);
+  extGateSignTex.colorSpace = THREE.SRGBColorSpace;
+  extGateSignTex.anisotropy = maxAnisotropy;
+  const extGateSignMat = new THREE.MeshStandardMaterial({
+    map: extGateSignTex,
+    roughness: 0.28,
+    emissive: 0x0f2554,
+    emissiveIntensity: 0.45,
+  });
+  const extGateIronMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.34,
+    metalness: 0.82,
+  });
+  const extGateRecessMat = new THREE.MeshStandardMaterial({
+    color: 0x050d1e,
+    roughness: 0.85,
+    metalness: 0.15,
+  });
 
-  [0, 0.25, 0.5, 0.75].forEach((s) => {
-    const p = evaluateStadiumOval(s, extWallR + 14.0, straightLen, midR);
+  const gatePillarGeo = new THREE.BoxGeometry(4.2, 18.8, 8.6);
+  const gateCheekGeo = new THREE.BoxGeometry(1.4, 16.5, 6.2);
+  const gateRecessGeo = new THREE.BoxGeometry(26.2, 16.4, 0.8);
+  const gateHeaderGeo = new THREE.BoxGeometry(36.0, 4.6, 10.2);
+  const gateSignGeo = new THREE.PlaneGeometry(29.0, 3.6);
+  const gateGlowGeo = new THREE.BoxGeometry(33.2, 0.45, 0.4);
+  const gateStepGeo = new THREE.BoxGeometry(36.5, 1.0, 6.8);
+  const fenceCurbGeo = new THREE.BoxGeometry(6.8, 1.05, 0.72);
+  const extFenceRailGeo = new THREE.BoxGeometry(6.8, 0.22, 0.22);
+  const fenceBarGeo = new THREE.BoxGeometry(0.14, 5.2, 0.14);
+  const fenceTipGeo = new THREE.ConeGeometry(0.14, 0.38, 4);
+  const doorPostGeo = new THREE.BoxGeometry(0.58, 7.2, 0.58);
+  const doorFrameVGeo = new THREE.BoxGeometry(0.24, 6.2, 0.24);
+  const doorFrameHGeo = new THREE.BoxGeometry(5.9, 0.24, 0.24);
+  const doorPicketGeo = new THREE.BoxGeometry(0.12, 5.95, 0.12);
+  const doorHandleGeo = new THREE.BoxGeometry(0.16, 1.1, 0.28);
+  disposables.push(
+    extGateSignTex,
+    extGateSignMat,
+    extGateIronMat,
+    extGateRecessMat,
+    gatePillarGeo,
+    gateCheekGeo,
+    gateRecessGeo,
+    gateHeaderGeo,
+    gateSignGeo,
+    gateGlowGeo,
+    gateStepGeo,
+    fenceCurbGeo,
+    extFenceRailGeo,
+    fenceBarGeo,
+    fenceTipGeo,
+    doorPostGeo,
+    doorFrameVGeo,
+    doorFrameHGeo,
+    doorPicketGeo,
+    doorHandleGeo
+  );
+
+  // Placed ONLY ONCE at North main facade (s = 0.5), anchored flush into extLowerWall (extWallR = 244.1)
+  {
+    const p = evaluateStadiumOval(0.5, extWallR, straightLen, midR);
     const radialYaw = Math.atan2(-p.fz, p.fx);
     const gateGrp = new THREE.Group();
     gateGrp.position.set(p.x, 0, p.z);
     gateGrp.rotation.y = radialYaw;
 
+    // Monumental left & right columns embedded cleanly (-2.4m) into the exterior stadium wall
     const colL = new THREE.Mesh(gatePillarGeo, exoSteelMat);
-    colL.position.set(-14.5, 8.75, 0);
+    colL.position.set(-14.8, 9.4, 1.9);
     const colR = new THREE.Mesh(gatePillarGeo, exoSteelMat);
-    colR.position.set(14.5, 8.75, 0);
+    colR.position.set(14.8, 9.4, 1.9);
+
+    // Recessed vestibule inner walls & dark entry portal backing flush against the stadium facade
+    const cheekL = new THREE.Mesh(gateCheekGeo, stepFrontMat);
+    cheekL.position.set(-12.7, 8.25, 1.1);
+    const cheekR = new THREE.Mesh(gateCheekGeo, stepFrontMat);
+    cheekR.position.set(12.7, 8.25, 1.1);
+    const recessBack = new THREE.Mesh(gateRecessGeo, extGateRecessMat);
+    recessBack.position.set(0, 8.2, -0.35);
+
+    // Attached cantilevered header canopy spanning from inside the building facade out over the gate fence
     const header = new THREE.Mesh(gateHeaderGeo, canopyMat);
-    header.position.set(0, 17.5, 0);
-    const glowBar = new THREE.Mesh(gateLogoGeo, facadeAccentMat);
-    glowBar.position.set(0, 17.5, 2.5);
+    header.position.set(0, 18.8, 2.7);
+    const gateSign = new THREE.Mesh(gateSignGeo, extGateSignMat);
+    gateSign.position.set(0, 18.85, 7.86);
+    const glowBarTop = new THREE.Mesh(gateGlowGeo, facadeAccentMat);
+    glowBarTop.position.set(0, 21.05, 7.72);
+    const glowBarBot = new THREE.Mesh(gateGlowGeo, facadeAccentMat);
+    glowBarBot.position.set(0, 16.62, 7.72);
+
+    // Entry plaza threshold & steps attached directly in front of the gate fence
     const steps = new THREE.Mesh(gateStepGeo, stepFrontMat);
-    steps.position.set(0, 0.7, 3.2);
-    gateGrp.add(colL, colR, header, glowBar, steps);
+    steps.position.set(0, 0.5, 8.3);
+
+    // Metallic Gate Fence Wings (left & right fixed wrought-iron fence sections) at local z = +4.8
+    const fenceZ = 4.8;
+    for (const side of [-1, 1] as const) {
+      const wingCenterX = side * 9.6;
+      const curb = new THREE.Mesh(fenceCurbGeo, stepFrontMat);
+      curb.position.set(wingCenterX, 0.525, fenceZ);
+      const railBot = new THREE.Mesh(extFenceRailGeo, extGateIronMat);
+      railBot.position.set(wingCenterX, 1.35, fenceZ);
+      const railMid = new THREE.Mesh(extFenceRailGeo, extGateIronMat);
+      railMid.position.set(wingCenterX, 3.65, fenceZ);
+      const railTop = new THREE.Mesh(extFenceRailGeo, extGateIronMat);
+      railTop.position.set(wingCenterX, 6.05, fenceZ);
+      gateGrp.add(curb, railBot, railMid, railTop);
+
+      for (let b = 0; b < 9; b++) {
+        const bx = wingCenterX - 2.8 + b * 0.7;
+        const bar = new THREE.Mesh(fenceBarGeo, extGateIronMat);
+        bar.position.set(bx, 3.65, fenceZ);
+        const tip = new THREE.Mesh(fenceTipGeo, gantryGoldMat);
+        tip.position.set(bx, 6.42, fenceZ);
+        gateGrp.add(bar, tip);
+      }
+
+      // Heavy steel gate hinge post separating fence wing and central double doors
+      const post = new THREE.Mesh(doorPostGeo, extGateIronMat);
+      post.position.set(side * 6.2, 3.6, fenceZ);
+      const postCap = new THREE.Mesh(fenceTipGeo, gantryGoldMat);
+      postCap.scale.set(2.4, 1.8, 2.4);
+      postCap.position.set(side * 6.2, 7.45, fenceZ);
+      gateGrp.add(post, postCap);
+    }
+
+    // Central Double Gate Doors ("pintu pagar ganda") hinged at x = ±6.05, welcomingly slightly open outward (~18°)
+    const buildGateDoorLeaf = (side: -1 | 1) => {
+      const leaf = new THREE.Group();
+      leaf.position.set(side * 6.05, 0.45, fenceZ);
+      // Slight inviting outward swing (+Z)
+      leaf.rotation.y = side === -1 ? -0.28 : 0.28;
+      const dir = -side; // points from hinge toward center x=0
+      const leafW = 5.9;
+      const midX = dir * (leafW / 2);
+
+      const frameHinge = new THREE.Mesh(doorFrameVGeo, extGateIronMat);
+      frameHinge.position.set(dir * 0.12, 3.1, 0);
+      const frameCenter = new THREE.Mesh(doorFrameVGeo, extGateIronMat);
+      frameCenter.position.set(dir * (leafW - 0.12), 3.1, 0);
+      const frameBot = new THREE.Mesh(doorFrameHGeo, extGateIronMat);
+      frameBot.position.set(midX, 0.2, 0);
+      const frameMid = new THREE.Mesh(doorFrameHGeo, extGateIronMat);
+      frameMid.position.set(midX, 3.15, 0);
+      const frameTop = new THREE.Mesh(doorFrameHGeo, extGateIronMat);
+      frameTop.position.set(midX, 6.1, 0);
+      const goldBand = new THREE.Mesh(doorFrameHGeo, gantryGoldMat);
+      goldBand.scale.set(0.96, 0.55, 1.12);
+      goldBand.position.set(midX, 5.55, 0);
+      const handle = new THREE.Mesh(doorHandleGeo, gantryGoldMat);
+      handle.position.set(dir * (leafW - 0.45), 2.85, 0.16);
+      leaf.add(frameHinge, frameCenter, frameBot, frameMid, frameTop, goldBand, handle);
+
+      for (let k = 1; k <= 8; k++) {
+        const px = dir * (k * (leafW / 9));
+        const picket = new THREE.Mesh(doorPicketGeo, extGateIronMat);
+        picket.position.set(px, 3.15, 0);
+        const pTip = new THREE.Mesh(fenceTipGeo, gantryGoldMat);
+        pTip.position.set(px, 6.38, 0);
+        leaf.add(picket, pTip);
+      }
+      return leaf;
+    };
+
+    gateGrp.add(
+      colL,
+      colR,
+      cheekL,
+      cheekR,
+      recessBack,
+      header,
+      gateSign,
+      glowBarTop,
+      glowBarBot,
+      steps,
+      buildGateDoorLeaf(-1),
+      buildGateDoorLeaf(1)
+    );
     stadiumGroup.add(gateGrp);
-  });
+  }
 
   // 8) Sweeping Cantilever PTFE Architectural Membrane Roof & Steel Truss Ring
   const roofInnerR = 171.0;
@@ -1393,6 +1709,18 @@ export function createStadium(
   if (roofClothInst.instanceColor) roofClothInst.instanceColor.needsUpdate = true;
   stadiumGroup.add(roofPoleInst, roofClothInst);
 
+  // 13) Exterior Stadium Grounds: Batako Paving Plaza, 360° Perimeter Wall & Iron Fence,
+  //     Grand Front Entrance Fence/Gate, Front-Yard Lined Shade Trees & Rear Car/Motorcycle Parking
+  const exteriorGrounds = createStadiumExteriorGrounds({
+    straightLen,
+    innerR,
+    midR,
+    extWallR,
+    maxAnisotropy,
+  });
+  stadiumGroup.add(exteriorGrounds.group);
+  disposables.push(...exteriorGrounds.disposables);
+
   // ==================== B. NIGHT SKY DOME ====================
   const moonGeo = new THREE.SphereGeometry(18, 16, 12);
   const moonMat = new THREE.MeshBasicMaterial({
@@ -1468,6 +1796,22 @@ export function createStadium(
   for (let i = 0; i < fenceCount; i++) {
     const s = i / fenceCount;
     const p = evaluateStadiumOval(s, outerR + 2.5, straightLen, midR);
+    const inEntranceGap = p.z < -innerR && Math.abs(p.x) < TUNNEL_CUTOUT_HALF_W;
+    if (inEntranceGap) {
+      archDummy.position.set(0, -100, 0);
+      archDummy.scale.set(0, 0, 0);
+      archDummy.updateMatrix();
+      fencePostInst.setMatrixAt(i, archDummy.matrix);
+      fenceRailInst.setMatrixAt(i, archDummy.matrix);
+      if (i % 8 === 0 && fieldFlagIdx < fieldFlagCount) {
+        fieldFlagPoleInst.setMatrixAt(fieldFlagIdx, archDummy.matrix);
+        fieldFlagClothInst.setMatrixAt(fieldFlagIdx, archDummy.matrix);
+        fieldFlagClothInst.setColorAt(fieldFlagIdx, flagColorObjs[fieldFlagIdx % flagColorObjs.length]);
+        fieldFlagIdx++;
+      }
+      continue;
+    }
+
     archDummy.position.set(p.x, 0.88, p.z);
     archDummy.rotation.set(0, p.yaw + Math.PI / 2, 0);
     archDummy.scale.set(1, 1, 1);
@@ -1669,69 +2013,81 @@ export function createStadium(
   }
 
   const stadiumPlacements: SpecPlacement[] = [];
-  // Lower Bowl spectators (6 tiers — balanced lively crowd with high GPU frame rate)
+  // Lower Bowl spectators (6 tiers × 2 tightly-packed staggered rows per tier; empty above North Athlete Tunnel!)
   for (let t = 0; t < lowerTierCount; t++) {
-    const r = lowerBaseR + t * lowerTierDepth + lowerTierDepth * 0.52;
     const stepY = lowerBaseY + (t + 1) * lowerTierStepH;
-    const countOnTier = 62 + t * 4;
-    for (let c = 0; c < countOnTier; c++) {
-      const s = (c + (t % 2) * 0.5) / countOnTier;
-      const pose = evaluateStadiumOval(s, r, straightLen, midR);
-      const jitterR = (Math.random() - 0.5) * 0.8;
-      stadiumPlacements.push({
-        x: pose.x + -pose.fz * jitterR,
-        y: stepY,
-        z: pose.z + pose.fx * jitterR,
-        yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.22,
-        scale: 1.12 + Math.random() * 0.2,
-        phase: s * 35 + t * 1.7 + Math.random() * 1.2,
-        jerseyColor: jerseyPalette[(c + t * 3) % jerseyPalette.length],
-        pantsColor: pantsPalette[(c + t) % pantsPalette.length],
-        skinColor: skinPalette[(c * 7 + t) % skinPalette.length],
-        hairColor: hairPalette[(c * 5 + t * 2) % hairPalette.length],
-        shoeColor: shoePalette[(c + t * 2) % shoePalette.length],
-      });
+    const countPerSubRow = 285 + t * 14;
+    for (let subRow = 0; subRow < 2; subRow++) {
+      const r = lowerBaseR + t * lowerTierDepth + lowerTierDepth * (subRow === 0 ? 0.28 : 0.74);
+      const rowY = stepY + subRow * 0.28;
+      for (let c = 0; c < countPerSubRow; c++) {
+        const s = (c + ((t + subRow) % 2) * 0.5) / countPerSubRow;
+        const pose = evaluateStadiumOval(s, r, straightLen, midR);
+        if (pose.z < -innerR && Math.abs(pose.x) < cutoutEdgeHalfW + 1.4) {
+          continue;
+        }
+        const jitterR = (Math.random() - 0.5) * 0.42;
+        stadiumPlacements.push({
+          x: pose.x + -pose.fz * jitterR,
+          y: rowY,
+          z: pose.z + pose.fx * jitterR,
+          yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.18,
+          scale: 1.56 + Math.random() * 0.22,
+          phase: s * 35 + t * 1.7 + subRow * 0.9 + Math.random() * 1.2,
+          jerseyColor: jerseyPalette[(c + t * 3 + subRow * 2) % jerseyPalette.length],
+          pantsColor: pantsPalette[(c + t + subRow) % pantsPalette.length],
+          skinColor: skinPalette[(c * 7 + t + subRow * 3) % skinPalette.length],
+          hairColor: hairPalette[(c * 5 + t * 2 + subRow) % hairPalette.length],
+          shoeColor: shoePalette[(c + t * 2 + subRow) % shoePalette.length],
+        });
+      }
     }
   }
 
-  // Upper Bowl spectators (7 tiers)
+  // Upper Bowl spectators (7 tiers × 2 tightly-packed staggered rows — Tribun Lantai 2 remains 100% intact 360°!)
   for (let t = 0; t < upperTierCount; t++) {
-    const r = upperBaseR + t * upperTierDepth + upperTierDepth * 0.52;
     const stepY = upperBaseY + (t + 1) * upperTierStepH;
-    const countOnTier = 48 + t * 3;
-    for (let c = 0; c < countOnTier; c++) {
-      const s = (c + (t % 2) * 0.5) / countOnTier;
-      const pose = evaluateStadiumOval(s, r, straightLen, midR);
-      const jitterR = (Math.random() - 0.5) * 0.85;
-      stadiumPlacements.push({
-        x: pose.x + -pose.fz * jitterR,
-        y: stepY,
-        z: pose.z + pose.fx * jitterR,
-        yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.22,
-        scale: 1.15 + Math.random() * 0.22,
-        phase: s * 35 + t * 2.1 + Math.random() * 1.4,
-        jerseyColor: jerseyPalette[(c * 3 + t * 2) % jerseyPalette.length],
-        pantsColor: pantsPalette[(c + t) % pantsPalette.length],
-        skinColor: skinPalette[(c * 5 + t) % skinPalette.length],
-        hairColor: hairPalette[(c * 7 + t) % hairPalette.length],
-        shoeColor: shoePalette[(c + t) % shoePalette.length],
-      });
+    const countPerSubRow = 290 + t * 14;
+    for (let subRow = 0; subRow < 2; subRow++) {
+      const r = upperBaseR + t * upperTierDepth + upperTierDepth * (subRow === 0 ? 0.28 : 0.74);
+      const rowY = stepY + subRow * 0.34;
+      for (let c = 0; c < countPerSubRow; c++) {
+        const s = (c + ((t + subRow) % 2) * 0.5) / countPerSubRow;
+        const pose = evaluateStadiumOval(s, r, straightLen, midR);
+        const jitterR = (Math.random() - 0.5) * 0.48;
+        stadiumPlacements.push({
+          x: pose.x + -pose.fz * jitterR,
+          y: rowY,
+          z: pose.z + pose.fx * jitterR,
+          yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.18,
+          scale: 1.62 + Math.random() * 0.24,
+          phase: s * 35 + t * 2.1 + subRow * 1.1 + Math.random() * 1.4,
+          jerseyColor: jerseyPalette[(c * 3 + t * 2 + subRow * 4) % jerseyPalette.length],
+          pantsColor: pantsPalette[(c + t + subRow) % pantsPalette.length],
+          skinColor: skinPalette[(c * 5 + t + subRow * 2) % skinPalette.length],
+          hairColor: hairPalette[(c * 7 + t + subRow * 3) % hairPalette.length],
+          shoeColor: shoePalette[(c + t + subRow) % shoePalette.length],
+        });
+      }
     }
   }
 
   const fieldPlacements: SpecPlacement[] = [];
-  for (let row = 0; row < 2; row++) {
-    const r = outerR + 4.8 + row * 3.0;
-    const count = 78 + row * 12;
+  for (let row = 0; row < 3; row++) {
+    const r = outerR + 4.4 + row * 2.3;
+    const count = 200 + row * 24;
     for (let c = 0; c < count; c++) {
       const s = (c + row * 0.5) / count;
       const pose = evaluateStadiumOval(s, r, straightLen, midR);
+      if (pose.z < -innerR && Math.abs(pose.x) < cutoutEdgeHalfW + 1.4) {
+        continue;
+      }
       fieldPlacements.push({
         x: pose.x,
         y: 0.03,
         z: pose.z,
-        yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.28,
-        scale: 1.05 + Math.random() * 0.2,
+        yaw: computeSpectatorYaw(pose) + (Math.random() - 0.5) * 0.22,
+        scale: 1.32 + Math.random() * 0.2,
         phase: s * 35 + row * 1.7 + Math.random() * 1.2,
         jerseyColor: jerseyPalette[(c + row * 3) % jerseyPalette.length],
         pantsColor: pantsPalette[c % pantsPalette.length],
@@ -2356,8 +2712,8 @@ export function createStadium(
   }
 
   const backdropCanvas = document.createElement('canvas');
-  backdropCanvas.width = 1280;
-  backdropCanvas.height = 560;
+  backdropCanvas.width = 1920;
+  backdropCanvas.height = 840;
   const backdropCtx = backdropCanvas.getContext('2d')!;
   const backdropTex = new THREE.CanvasTexture(backdropCanvas);
   backdropTex.colorSpace = THREE.SRGBColorSpace;
@@ -2413,68 +2769,262 @@ export function createStadium(
     stageLampGlowMat
   );
 
-  // Clean podium backdrop displaying ONLY the official application logo image
+  // Victory podium backdrop: Ranks 1–15 on left, official app logo centered, Ranks 16–30 on right
   const APP_LOGO_SRC = '/assets/aistudio/file_0000000043908211ab498b6aee2c83f0_adb48a40.png';
   let podiumLogoImg: HTMLImageElement | null = null;
   let podiumBackdropDisposed = false;
+  let latestPodiumWinners: PodiumWinnerSummary[] = [];
+  let lastWinnersSignature = '__INIT__';
 
-  function renderLogoOnlyBackdrop() {
+  function fitCanvasText(
+    ctx: CanvasRenderingContext2D,
+    raw: string,
+    maxWidth: number
+  ): string {
+    const text = (raw || '').trim();
+    if (!text) return '—';
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    let end = text.length;
+    while (end > 1 && ctx.measureText(`${text.slice(0, end)}…`).width > maxWidth) {
+      end -= 1;
+    }
+    return `${text.slice(0, end)}…`;
+  }
+
+  function formatBackdropScore(score: number): string {
+    const rounded = Number((score || 0).toFixed(1));
+    return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}p`;
+  }
+
+  function drawRankingPanel(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    title: string,
+    startRank: number,
+    endRank: number,
+    winnerByRank: Map<number, PodiumWinnerSummary>,
+    accentHex: string
+  ) {
+    // Sleek translucent navy board
+    ctx.save();
+    ctx.fillStyle = 'rgba(7, 19, 43, 0.84)';
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.42)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    // Header strip
+    const headerH = 56;
+    const hGrad = ctx.createLinearGradient(x, y, x + w, y);
+    hGrad.addColorStop(0, accentHex);
+    hGrad.addColorStop(1, 'rgba(15, 42, 94, 0.95)');
+    ctx.fillStyle = hGrad;
+    ctx.beginPath();
+    ctx.roundRect(x + 2, y + 2, w - 4, headerH, [16, 16, 4, 4]);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '800 24px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, x + w / 2, y + headerH / 2 + 2);
+
+    const rowCount = endRank - startRank + 1;
+    const listTop = y + headerH + 10;
+    const listH = h - headerH - 18;
+    const rowH = listH / rowCount;
+
+    for (let i = 0; i < rowCount; i++) {
+      const rank = startRank + i;
+      const entry = winnerByRank.get(rank);
+      const ry = listTop + i * rowH;
+      const midY = ry + rowH / 2;
+
+      // Subtle alternating row band
+      const isTop3 = rank <= 3;
+      ctx.fillStyle = isTop3
+        ? rank === 1
+          ? 'rgba(250, 204, 21, 0.20)'
+          : rank === 2
+          ? 'rgba(226, 232, 240, 0.16)'
+          : 'rgba(249, 115, 22, 0.16)'
+        : i % 2 === 0
+        ? 'rgba(30, 58, 138, 0.28)'
+        : 'rgba(15, 23, 42, 0.22)';
+      ctx.beginPath();
+      ctx.roundRect(x + 12, ry + 2, w - 24, rowH - 4, 8);
+      ctx.fill();
+
+      // Rank badge
+      const badgeW = 62;
+      const badgeH = Math.max(24, rowH - 10);
+      const badgeX = x + 18;
+      const badgeY = midY - badgeH / 2;
+      ctx.fillStyle =
+        rank === 1
+          ? '#FACC15'
+          : rank === 2
+          ? '#CBD5E1'
+          : rank === 3
+          ? '#F97316'
+          : rank === 4
+          ? '#38BDF8'
+          : entry
+          ? '#1E3A8A'
+          : 'rgba(30, 41, 59, 0.6)';
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 6);
+      ctx.fill();
+
+      ctx.fillStyle = rank <= 4 ? '#07132B' : entry ? '#E2E8F0' : '#64748B';
+      ctx.font = '800 20px ui-monospace, SFMono-Regular, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`#${rank}`, badgeX + badgeW / 2, midY + 1);
+
+      // Participant name & score
+      const nameX = badgeX + badgeW + 14;
+      const scoreRightX = x + w - 22;
+      const maxNameW = w - badgeW - 140;
+
+      if (entry) {
+        ctx.fillStyle = rank === 1 ? '#FEF08A' : '#F8FAFC';
+        ctx.font = rank <= 3
+          ? '800 22px system-ui, -apple-system, sans-serif'
+          : '600 21px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(fitCanvasText(ctx, entry.name, maxNameW), nameX, midY + 1);
+
+        ctx.fillStyle = rank === 1 ? '#FACC15' : '#7DD3FC';
+        ctx.font = '800 21px ui-monospace, SFMono-Regular, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(formatBackdropScore(entry.score), scoreRightX, midY + 1);
+      } else {
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.38)';
+        ctx.font = '600 19px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('—', nameX, midY + 1);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  function renderPodiumBackdrop(winners: PodiumWinnerSummary[] = latestPodiumWinners) {
     if (podiumBackdropDisposed) return;
     const ctx = backdropCtx;
     const W = backdropCanvas.width;
     const H = backdropCanvas.height;
 
-    // Clean championship navy backdrop with soft center spotlight glow
+    // Championship navy backdrop with center spotlight glow behind app logo
     const grad = ctx.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, '#06132C');
+    grad.addColorStop(0, '#051026');
     grad.addColorStop(0.5, '#0F2A5E');
-    grad.addColorStop(1, '#06132C');
+    grad.addColorStop(1, '#051026');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
-    const glow = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, 440);
-    glow.addColorStop(0, 'rgba(56, 189, 248, 0.32)');
-    glow.addColorStop(0.55, 'rgba(250, 204, 21, 0.10)');
+    const glow = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, 460);
+    glow.addColorStop(0, 'rgba(56, 189, 248, 0.34)');
+    glow.addColorStop(0.55, 'rgba(250, 204, 21, 0.14)');
     glow.addColorStop(1, 'rgba(6, 19, 44, 0)');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
 
-    // Subtle gold border frame matching the podium truss
+    // Outer gold border frame matching the podium truss
     ctx.strokeStyle = '#FACC15';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(14, 14, W - 28, H - 28);
+    ctx.lineWidth = 10;
+    ctx.strokeRect(16, 16, W - 32, H - 32);
 
-    // Draw ONLY the official app logo centered at native aspect ratio
+    // Index winners 1..30 by rank
+    const winnerByRank = new Map<number, PodiumWinnerSummary>();
+    for (let i = 0; i < winners.length && i < 30; i++) {
+      const item = winners[i];
+      const rank = item.rank >= 1 && item.rank <= 30 ? item.rank : i + 1;
+      if (!winnerByRank.has(rank)) {
+        winnerByRank.set(rank, { ...item, rank });
+      }
+    }
+
+    const panelPad = 36;
+    const panelW = 610;
+    const panelH = H - panelPad * 2;
+
+    // Left board: Ranks 1 – 15
+    drawRankingPanel(
+      ctx,
+      panelPad,
+      panelPad,
+      panelW,
+      panelH,
+      'PERINGKAT 1 – 15',
+      1,
+      15,
+      winnerByRank,
+      'rgba(217, 119, 6, 0.92)'
+    );
+
+    // Right board: Ranks 16 – 30
+    drawRankingPanel(
+      ctx,
+      W - panelPad - panelW,
+      panelPad,
+      panelW,
+      panelH,
+      'PERINGKAT 16 – 30',
+      16,
+      30,
+      winnerByRank,
+      'rgba(2, 132, 199, 0.92)'
+    );
+
+    // Center zone: Official application logo cleanly framed between the two boards
+    const centerZoneW = W - (panelPad + panelW) * 2 - 36;
+    const centerZoneH = H - 120;
     if (podiumLogoImg && podiumLogoImg.complete && podiumLogoImg.naturalWidth > 0) {
-      const maxH = H - 64;
-      const maxW = W - 160;
       const aspect = podiumLogoImg.naturalWidth / podiumLogoImg.naturalHeight;
-      let drawH = maxH;
-      let drawW = drawH * aspect;
-      if (drawW > maxW) {
-        drawW = maxW;
-        drawH = drawW / aspect;
+      let drawW = centerZoneW;
+      let drawH = drawW / aspect;
+      if (drawH > centerZoneH) {
+        drawH = centerZoneH;
+        drawW = drawH * aspect;
       }
       const dx = (W - drawW) / 2;
       const dy = (H - drawH) / 2;
       ctx.save();
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-      ctx.shadowBlur = 24;
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+      ctx.shadowBlur = 28;
       ctx.shadowOffsetY = 8;
       ctx.drawImage(podiumLogoImg, dx, dy, drawW, drawH);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = '#FACC15';
+      ctx.font = '900 44px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('EDU RUN', W / 2, H / 2 - 26);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '800 36px system-ui, -apple-system, sans-serif';
+      ctx.fillText('ARENA 3D', W / 2, H / 2 + 26);
       ctx.restore();
     }
 
     backdropTex.needsUpdate = true;
   }
 
-  renderLogoOnlyBackdrop();
+  renderPodiumBackdrop([]);
   if (typeof Image !== 'undefined') {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       podiumLogoImg = img;
-      renderLogoOnlyBackdrop();
+      renderPodiumBackdrop(latestPodiumWinners);
     };
     img.src = APP_LOGO_SRC;
   }
@@ -2483,11 +3033,23 @@ export function createStadium(
     return podiumTargets;
   }
 
-  function updatePodiumCeremony(active: boolean, riseT: number, _winners: PodiumWinnerSummary[] = []) {
+  function updatePodiumCeremony(active: boolean, riseT: number, winners: PodiumWinnerSummary[] = []) {
     podiumGroup.visible = active;
     if (!active) return;
     const clampedT = THREE.MathUtils.clamp(riseT, 0, 1);
     podiumGroup.position.y = -6.5 * Math.pow(1 - clampedT, 3);
+
+    let sig = '';
+    const limit = Math.min(30, winners.length);
+    for (let i = 0; i < limit; i++) {
+      const w = winners[i];
+      sig += `${w.rank}:${w.name}:${w.score}|`;
+    }
+    if (sig !== lastWinnersSignature) {
+      lastWinnersSignature = sig;
+      latestPodiumWinners = winners.slice(0, 30);
+      renderPodiumBackdrop(latestPodiumWinners);
+    }
   }
 
   function getTrackPose(progress: number, lane: number, maxLanes = laneCount, out?: TrackPose): TrackPose {
@@ -2506,11 +3068,11 @@ export function createStadium(
   }
 
   function getEntrancePose(lane: number): StadiumEntrancePose {
-    const slotOffset = ((lane % 5) - 2) * 0.72;
+    const slotOffset = ((lane % 7) - 3) * 1.45;
     return {
       startX: entranceCenterX + slotOffset,
-      startZ: entranceBackZ - 0.65,
-      exitZ: outerR + 0.45,
+      startZ: entranceFrontZ - 14.5, // deep inside the North Athlete Tunnel (~ -182.9)
+      exitZ: -outerR + 2.5, // exits tunnel & apron onto North track edge (-161.0)
     };
   }
 
@@ -2540,6 +3102,9 @@ export function createStadium(
     updateSpectators: (elapsed, cheering) => {
       specUniforms.uTime.value = elapsed;
       specUniforms.uCheer.value = THREE.MathUtils.lerp(specUniforms.uCheer.value, cheering ? 1 : 0, 0.08);
+      if (stadiumGroup.visible) {
+        exteriorGrounds.update(elapsed);
+      }
       if (dayCloudsGroup.visible) {
         dayCloudsGroup.rotation.y = elapsed * 0.012;
       }

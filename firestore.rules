@@ -372,7 +372,7 @@ service cloud.firestore {
       && data.className is string && data.className.size() >= 1 && data.className.size() <= 24
       && data.avatar is map
       && data.lane is int && data.lane >= 0 && data.lane <= 29
-      && (data.distance is int || data.distance is float) && data.distance >= 0 && data.distance <= 10000
+      && (data.distance is int || data.distance is float) && data.distance >= 0 && data.distance <= 200000
       && (data.progress is int || data.progress is float) && data.progress >= 0 && data.progress <= 1
       && (data.speed is int || data.speed is float) && data.speed >= 0 && data.speed <= 60
       && data.effectState is string && data.effectState.size() <= 16

@@ -253,7 +253,7 @@ function loadRoomFromDb(roomIdOrCode: string, byCode = false): LiveRoom | null {
       questionCount: questions.length > 0 ? questions.length : settings.questionCount,
     },
     questions,
-    trackLength: calcTrackLength(questions.length),
+    trackLength: calcTrackLength(questions.length, settings.baseSpeed),
     participants,
     studentSockets: new Map(),
     teacherSockets: new Set(),
@@ -697,8 +697,8 @@ function recordAnswer(
   } else {
     p.effectState = 'penalty';
     p.effectExpiresAt = now + room.settings.penaltyDuration * 1000;
-    // Very slow running penalty for wrong answer or timeout
-    p.speed = room.settings.baseSpeed * 0.25;
+    // Casual walking pace on wrong answer or timeout
+    p.speed = room.settings.baseSpeed * 0.42;
   }
 
   p.currentQuestionIndex += 1;

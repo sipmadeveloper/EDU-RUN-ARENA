@@ -11,24 +11,17 @@ import {
   WifiOff,
   Send,
   Flag,
-  Sun,
-  Moon,
-  Trees,
   RotateCcw,
   Home,
   Award,
   Music,
-  SkipForward,
-  Grid2x2,
 } from 'lucide-react';
 import { getVictoryMetaForRank } from '../three/victoryAnimations';
 import {
   AVATAR_COLORS,
-  RACE_VENUES,
   type PlayerState,
   type QuestionType,
   type RaceVenueId,
-  type RoomSettings,
   type RoomStatus,
 } from '../types/game';
 import type { JoinedSession } from './StudentJoinView';
@@ -36,13 +29,12 @@ import {
   CAMERA_PRESET_LIST,
   StadiumArena3D,
   type CameraPresetId,
-  type CameraViewMode,
 } from './StadiumArena3D';
 import { MatchResultsModal } from './MatchResultsModal';
 import { StadiumCountdownOverlay } from './StadiumCountdownOverlay';
 import { RaceTrackProgressBar } from './RaceTrackProgressBar';
 import { Loading3D } from './Loading3D';
-import { RACE_MUSIC_TRACKS, soundEngine, type RaceMusicTrackId } from '../audio/soundEngine';
+import { soundEngine } from '../audio/soundEngine';
 import {
   MAX_MATCH_SCORE,
   calcGatesPerLap,
@@ -105,11 +97,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const [muted, setMuted] = useState(soundEngine.muted);
   const [volume, setVolume] = useState(soundEngine.volume);
   const [musicEnabled, setMusicEnabled] = useState(soundEngine.musicEnabled);
-  const [musicTrack, setMusicTrack] = useState<RaceMusicTrackId>(soundEngine.trackId);
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('chase');
-  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
-  const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
-  const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [showResultsOverride, setShowResultsOverride] = useState(false);
 
   const toastTimerRef = useRef<number | null>(null);
@@ -146,6 +134,10 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         rawRoomRef.current = nextRoom;
         setRoom(nextRoom);
 
+        if (nextRoom.musicTrack && soundEngine.trackId !== nextRoom.musicTrack) {
+          soundEngine.setMusicTrack(nextRoom.musicTrack);
+        }
+
         // Immediately project current participants with updated room state
         if (rawParticipantsRef.current.length > 0) {
           const now = getSyncedNowMs();
@@ -161,8 +153,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
           cancelParticipantPositionSync(session.roomCode, session.participantId);
           setCameraPreset('finish');
-          setCameraViewMode('single');
-          setFollowedPlayerId(null);
           if (!roomFinishedAudioRef.current) {
             roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
@@ -453,10 +443,10 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         showToast('boost', `BENAR${ptsText}! SPEED BOOST +${prepared.effectDurationSec} DETIK`);
       } else if (prepared.isTimeout) {
         soundEngine.playWrongPenalty();
-        showToast('penalty', `WAKTU HABIS! LARI SANGAT PELAN ${prepared.effectDurationSec} DETIK`);
+        showToast('penalty', `WAKTU HABIS! JALAN SANTAI ${prepared.effectDurationSec} DETIK`);
       } else {
         soundEngine.playWrongPenalty();
-        showToast('penalty', `SALAH! LARI SANGAT PELAN ${prepared.effectDurationSec} DETIK`);
+        showToast('penalty', `SALAH! JALAN SANTAI ${prepared.effectDurationSec} DETIK`);
       }
 
       nextQuestionAllowedAtRef.current = getSyncedNowMs() + QUESTION_HIDE_GAP_MS;
@@ -529,19 +519,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     setMusicEnabled(next);
   }
 
-  function handleCycleTrack() {
-    const nextId = soundEngine.cycleMusicTrack();
-    setMusicTrack(nextId);
-    setMusicEnabled(true);
-    if (soundEngine.muted) {
-      soundEngine.muted = false;
-      setMuted(false);
-    }
-  }
-
-  const activeTrackMeta =
-    RACE_MUSIC_TRACKS.find((t) => t.id === musicTrack) ?? RACE_MUSIC_TRACKS[0];
-
   const sortedLeader = useMemo(
     () => [...players].sort((a, b) => b.progress - a.progress || b.score - a.score),
     [players]
@@ -564,15 +541,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const pointsPerQuestion = room?.pointsPerQuestion ?? calcPointsPerQuestion(totalQuestions);
   const maxScore = room?.maxScore ?? MAX_MATCH_SCORE;
   const myColorHex = AVATAR_COLORS.find((c) => c.id === session.avatar.color)?.hex || '#2563EB';
-  const activeVenue: RaceVenueId = venueOverride ?? room?.settings?.venue ?? 'stadium_day';
-  const activeVenueMeta = RACE_VENUES.find((v) => v.id === activeVenue) ?? RACE_VENUES[0];
-  const cycleVenue = () => {
-    const idx = RACE_VENUES.findIndex((v) => v.id === activeVenue);
-    const next = RACE_VENUES[(idx + 1) % RACE_VENUES.length];
-    setVenueOverride(next.id);
-  };
-  const VenueIcon =
-    activeVenue === 'stadium_day' ? Sun : activeVenue === 'stadium_night' ? Moon : Trees;
+  const activeVenue: RaceVenueId = room?.settings?.venue ?? 'stadium_day';
 
   // Ambient stadium crowd + dynamic race intensity + heartbeat tension synced with live race state
   const roomStatus: RoomStatus = isEffectivePlaying ? 'playing' : room?.status ?? 'waiting';
@@ -677,19 +646,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     audioTelemetry.heartbeatTension,
   ]);
 
-  const followedPlayer = useMemo(
-    () => (followedPlayerId ? players.find((p) => p.id === followedPlayerId) ?? null : null),
-    [followedPlayerId, players]
-  );
-
-  const followablePlayers = useMemo(
-    () =>
-      [...players]
-        .sort((a, b) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }))
-        .map((p) => ({ id: p.id, name: p.name, className: p.className })),
-    [players]
-  );
-
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#081226] select-none">
       {/* Isolated Fullscreen 3D Stadium Viewport */}
@@ -703,20 +659,11 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           rawParticipantsRef={rawParticipantsRef}
           liveVersionRef={liveVersionRef}
           localPlayerId={session.participantId}
-          followedPlayerId={followedPlayer?.id ?? null}
-          followedPlayerName={followedPlayer?.name ?? null}
-          followablePlayers={followablePlayers}
-          defaultFollowLabel={`Diri Sendiri (${session.name})`}
-          onSelectFollowedPlayer={(id) =>
-            setFollowedPlayerId(id === session.participantId ? null : id)
-          }
           roomStatus={roomStatus}
           roomName={room?.name || 'EDU RUN ARENA 3D'}
           cameraPreset={cameraPreset}
-          cameraViewMode={cameraViewMode}
-          pipPlacement="top-row"
+          cameraViewMode="single"
           onSelectCameraPreset={setCameraPreset}
-          onChangeCameraViewMode={setCameraViewMode}
           venue={activeVenue}
         />
       </div>
@@ -754,60 +701,24 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setCameraViewMode((prev) =>
-                    prev === 'single' ? 'pip' : prev === 'pip' ? 'quad' : 'single'
-                  )
-                }
-                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
-                  cameraViewMode !== 'single'
-                    ? 'bg-[#FF6B1A] border-[#FF6B1A] text-white'
-                    : 'bg-[#0F2957] border-blue-400/30 text-white hover:bg-blue-800'
-                }`}
-                title="Live Preview 4 Posisi Kamera"
-              >
-                <Grid2x2 className="w-4 h-4 text-[#FACC15]" />
-                <span>{cameraViewMode === 'quad' ? 'Grid 2×2' : '4 Kamera'}</span>
-              </button>
-              <button
-                onClick={cycleVenue}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0F2957] border border-blue-400/30 text-xs font-semibold text-white hover:bg-blue-800 cursor-pointer"
-                title={`Tempat Balapan: ${activeVenueMeta.label} (klik untuk ganti tampilan)`}
-              >
-                <VenueIcon className="w-4 h-4 text-[#FACC15]" />
-                <span>{activeVenueMeta.shortLabel}</span>
-              </button>
               <div className="px-4 py-2 rounded-xl bg-[#0F2957] border border-blue-400/30 text-center">
                 <div className="text-[10px] text-blue-200 uppercase">Kode Room</div>
                 <div className="font-mono font-bold text-lg tracking-widest text-[#FACC15]">
                   {room.code}
                 </div>
               </div>
-              <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#0F2957] border border-white/15">
-                <button
-                  onClick={toggleMusic}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
-                    musicEnabled
-                      ? 'bg-[#FF6B1A]/20 text-[#FACC15]'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title={musicEnabled ? 'Matikan Musik Semangat' : 'Aktifkan Musik Semangat'}
-                >
-                  <Music className="w-4 h-4" />
-                  <span className="hidden sm:inline">
-                    {musicEnabled ? activeTrackMeta.title : 'Musik OFF'}
-                  </span>
-                </button>
-                <button
-                  onClick={handleCycleTrack}
-                  className="p-1.5 rounded-lg hover:bg-white/10 text-blue-200 hover:text-[#FACC15] cursor-pointer"
-                  title={`Ganti Lagu (${activeTrackMeta.title})`}
-                >
-                  <SkipForward className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <button
+                onClick={toggleMusic}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+                  musicEnabled
+                    ? 'bg-[#FF6B1A]/20 border-[#FF6B1A]/50 text-[#FACC15]'
+                    : 'bg-[#0F2957] border-white/15 text-slate-400 hover:text-white'
+                }`}
+                title={musicEnabled ? 'Matikan Musik Semangat' : 'Aktifkan Musik Semangat'}
+              >
+                <Music className="w-4 h-4" />
+                <span className="hidden sm:inline">{musicEnabled ? 'Musik ON' : 'Musik OFF'}</span>
+              </button>
               <div className="flex items-center gap-2 px-2.5 py-2 rounded-xl bg-[#0F2957] border border-white/15">
                 <button
                   onClick={toggleMute}
@@ -887,14 +798,8 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
             <RaceTrackProgressBar
               players={players}
               localPlayerId={session.participantId}
-              followedPlayerId={followedPlayer?.id ?? null}
               totalLaps={totalLaps}
               trackLength={room?.trackLength ?? 400}
-              onSelectPlayer={(playerId) =>
-                setFollowedPlayerId((prev) =>
-                  playerId === session.participantId || prev === playerId ? null : playerId
-                )
-              }
             />
 
             <div className="flex flex-wrap items-start justify-between gap-2.5">
@@ -922,9 +827,9 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   </div>
                 )}
                 {localPlayer?.effectState === 'penalty' && (
-                  <div className="px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400 text-rose-200 text-xs font-bold flex items-center gap-1 tabular-nums">
+                  <div className="px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400 text-amber-200 text-xs font-bold flex items-center gap-1 tabular-nums">
                     <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>LAMBAT {effectSecondsLeft}s</span>
+                    <span>JALAN SANTAI {effectSecondsLeft}s</span>
                   </div>
                 )}
               </div>
@@ -972,14 +877,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
 
                 <div className="flex items-center gap-1.5 pl-2 border-l border-white/15">
                   <button
-                    onClick={cycleVenue}
-                    className="inline-flex items-center gap-1 px-2.5 py-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-xs font-semibold text-slate-200 cursor-pointer"
-                    title={`Tempat: ${activeVenueMeta.label} (klik ganti tampilan)`}
-                  >
-                    <VenueIcon className="w-3.5 h-3.5 text-[#FACC15]" />
-                    <span className="hidden sm:inline">{activeVenueMeta.shortLabel}</span>
-                  </button>
-                  <button
                     type="button"
                     onClick={() => {
                       const idx = CAMERA_PRESET_LIST.findIndex((c) => c.id === cameraPreset);
@@ -987,29 +884,12 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                       setCameraPreset(next.id);
                     }}
                     className="inline-flex items-center gap-1 px-2 py-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-xs font-semibold text-slate-200 cursor-pointer"
-                    title="Ganti Sudut Kamera (4 Posisi)"
+                    title="Ganti Sudut Kamera"
                   >
                     <Camera className="w-3.5 h-3.5 text-[#FF6B1A]" />
                     <span className="font-mono text-[11px]">
                       {CAMERA_PRESET_LIST.find((c) => c.id === cameraPreset)?.camCode || 'CAM'}
                     </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCameraViewMode((prev) =>
-                        prev === 'single' ? 'pip' : prev === 'pip' ? 'quad' : 'single'
-                      )
-                    }
-                    className={`inline-flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
-                      cameraViewMode !== 'single'
-                        ? 'bg-[#FF6B1A] text-white'
-                        : 'bg-[#0F2957] hover:bg-blue-800 text-slate-200'
-                    }`}
-                    title="Live Preview 4 Kamera"
-                  >
-                    <Grid2x2 className="w-3.5 h-3.5 text-[#FACC15]" />
-                    <span className="hidden sm:inline">4 Cam</span>
                   </button>
                   <button
                     onClick={toggleMusic}
@@ -1018,16 +898,9 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                         ? 'bg-[#FF6B1A]/25 text-[#FACC15] border border-[#FF6B1A]/50'
                         : 'bg-[#0F2957] hover:bg-blue-800 text-slate-400'
                     }`}
-                    title={musicEnabled ? `Matikan Musik (${activeTrackMeta.title})` : 'Aktifkan Musik Semangat'}
+                    title={musicEnabled ? 'Matikan Musik Semangat' : 'Aktifkan Musik Semangat'}
                   >
                     <Music className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleCycleTrack}
-                    className="p-2 rounded-lg bg-[#0F2957] hover:bg-blue-800 text-slate-200 hover:text-[#FACC15] cursor-pointer"
-                    title={`Ganti Lagu (${activeTrackMeta.title})`}
-                  >
-                    <SkipForward className="w-4 h-4" />
                   </button>
                   <button
                     onClick={toggleMute}
@@ -1046,41 +919,23 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   <Trophy className="w-3.5 h-3.5" />
                 </div>
                 <div className="space-y-0.5">
-                  {sortedLeader.slice(0, 4).map((p, idx) => {
-                    const isFollowed = followedPlayer?.id === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() =>
-                          setFollowedPlayerId((prev) =>
-                            p.id === session.participantId || prev === p.id ? null : p.id
-                          )
-                        }
-                        className={`w-full flex items-center justify-between text-xs px-2 py-0.5 rounded-lg cursor-pointer transition-colors ${
-                          isFollowed
-                            ? 'bg-cyan-500/25 ring-1 ring-cyan-400/70 font-bold text-white'
-                            : p.id === session.participantId
-                            ? 'bg-[#FF6B1A]/25 font-bold text-white hover:bg-[#FF6B1A]/35'
-                            : 'text-slate-200 hover:bg-white/10'
-                        }`}
-                        title={
-                          p.id === session.participantId
-                            ? 'Fokus kamera ke diri sendiri'
-                            : isFollowed
-                            ? `Sedang mengikuti ${p.name} (klik untuk kembali ke diri sendiri)`
-                            : `Klik agar kamera mengikuti ${p.name}`
-                        }
-                      >
-                        <span className="truncate max-w-[110px]">
-                          {idx + 1}. {p.name}
-                        </span>
-                        <span className="font-mono text-[#FACC15] tabular-nums">
-                          {formatScoreValue(p.score)}p
-                        </span>
-                      </button>
-                    );
-                  })}
+                  {sortedLeader.slice(0, 4).map((p, idx) => (
+                    <div
+                      key={p.id}
+                      className={`w-full flex items-center justify-between text-xs px-2 py-0.5 rounded-lg ${
+                        p.id === session.participantId
+                          ? 'bg-[#FF6B1A]/25 font-bold text-white'
+                          : 'text-slate-200'
+                      }`}
+                    >
+                      <span className="truncate max-w-[110px]">
+                        {idx + 1}. {p.name}
+                      </span>
+                      <span className="font-mono text-[#FACC15] tabular-nums">
+                        {formatScoreValue(p.score)}p
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1287,14 +1142,6 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={cycleVenue}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0F2957] border border-blue-400/30 text-xs font-semibold text-white hover:bg-blue-800 cursor-pointer"
-                title={`Tempat: ${activeVenueMeta.label}`}
-              >
-                <VenueIcon className="w-4 h-4 text-[#FACC15]" />
-                <span>{activeVenueMeta.shortLabel}</span>
-              </button>
               <button
                 onClick={toggleMusic}
                 className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${

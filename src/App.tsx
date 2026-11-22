@@ -13,6 +13,7 @@ import { StudentRaceView } from './components/StudentRaceView';
 import { TeacherAuthView } from './components/TeacherAuthView';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { Loading3D } from './components/Loading3D';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 
 type AppRoute = 'landing' | 'student_join' | 'student_race' | 'teacher_auth' | 'teacher_dashboard';
 
@@ -181,7 +182,13 @@ export default function App() {
   }, []);
 
   return (
-    <>
+    <AppErrorBoundary
+      fallbackTitle="Dashboard Sedang Dipulihkan"
+      onReset={() => {
+        clearTransitionTimers();
+        setTransitionOverlay(null);
+      }}
+    >
       {route === 'landing' && (
         <LandingScreen
           onJoinMatch={() => navigateWithTransition('student_join')}
@@ -245,21 +252,29 @@ export default function App() {
         />
       )}
 
-      {route === 'teacher_dashboard' && teacherToken && teacherProfile && (
-        <TeacherDashboard
-          token={teacherToken}
-          teacher={teacherProfile}
-          onTeacherUpdated={(updated) => setTeacherProfile(updated)}
-          onLogout={() => {
-            clearDriveAccessToken();
-            signOut(auth).catch(() => {});
-            localStorage.removeItem('edurun_teacher_token');
-            navigateWithTransition('landing', () => {
-              setTeacherToken(null);
-              setTeacherProfile(null);
-            });
-          }}
-        />
+      {route === 'teacher_dashboard' && (
+        teacherToken && teacherProfile ? (
+          <TeacherDashboard
+            token={teacherToken}
+            teacher={teacherProfile}
+            onTeacherUpdated={(updated) => setTeacherProfile(updated)}
+            onLogout={() => {
+              clearDriveAccessToken();
+              signOut(auth).catch(() => {});
+              localStorage.removeItem('edurun_teacher_token');
+              navigateWithTransition('landing', () => {
+                setTeacherToken(null);
+                setTeacherProfile(null);
+              });
+            }}
+          />
+        ) : (
+          <Loading3D
+            variant="fullscreen"
+            title="Memulihkan Sesi Dashboard Guru..."
+            subtitle="Menyiapkan data akun dan daftar room"
+          />
+        )
       )}
 
       {showHowToPlay && <HowToPlayModal onClose={() => setShowHowToPlay(false)} />}
@@ -272,6 +287,6 @@ export default function App() {
           fadingOut={transitionOverlay.fadingOut}
         />
       )}
-    </>
+    </AppErrorBoundary>
   );
 }

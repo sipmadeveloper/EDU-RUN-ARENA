@@ -9,9 +9,6 @@ import {
   Download,
   Camera,
   Trophy,
-  Sun,
-  Moon,
-  Trees,
   Volume2,
   VolumeX,
   Music,
@@ -28,10 +25,8 @@ import {
 } from 'lucide-react';
 import {
   AVATAR_COLORS,
-  RACE_VENUES,
   type PlayerState,
   type RaceVenueId,
-  type RoomSettings,
   type RoomStatus,
 } from '../types/game';
 import {
@@ -52,6 +47,7 @@ import {
 import { formatFriendlyFirestoreError } from '../firebase';
 import {
   activatePlayingFirebaseRoom,
+  broadcastRoomMusicTrack,
   calibrateServerClock,
   downloadRoomExcelFromFirebase,
   finishFirebaseRoom,
@@ -90,7 +86,6 @@ export function TeacherRoomMonitor({
   const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
   const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
   const [showLiveRanking, setShowLiveRanking] = useState(true);
-  const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [muted, setMuted] = useState(soundEngine.muted);
   const [volume, setVolume] = useState(soundEngine.volume);
   const [musicEnabled, setMusicEnabled] = useState(soundEngine.musicEnabled);
@@ -107,11 +102,14 @@ export function TeacherRoomMonitor({
   const activatingPlayingRef = useRef(false);
   const autoFinishingRef = useRef(false);
   const roomFinishedAudioRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
     calibrateServerClock().catch(() => {});
     const unsub = subscribeLiveRoom(roomId, {
       onRoom: (nextRoom) => {
+        if (!isMountedRef.current) return;
         if (!nextRoom) {
           setError('Room tidak ditemukan atau sudah dihapus.');
           return;
@@ -146,6 +144,7 @@ export function TeacherRoomMonitor({
         }
       },
       onParticipants: (list) => {
+        if (!isMountedRef.current) return;
         const prevMap = prevParticipantsMapRef.current;
         if (prevMap.size > 0) {
           for (const p of list) {
@@ -170,11 +169,15 @@ export function TeacherRoomMonitor({
         setPlayers(projected);
       },
       onError: (err) => {
+        if (!isMountedRef.current) return;
         setError(formatFriendlyFirestoreError(err));
       },
     });
 
-    return () => unsub();
+    return () => {
+      isMountedRef.current = false;
+      unsub();
+    };
   }, [roomId]);
 
   // 10 Hz physics projection + countdown transition + auto-finish when all participants finish
@@ -262,6 +265,7 @@ export function TeacherRoomMonitor({
     setActionBusy(true);
     setError('');
     try {
+      broadcastRoomMusicTrack(roomId, musicTrack);
       await startFirebaseRoom(roomId, rawParticipantsRef.current.length);
     } catch (err) {
       setError(formatFriendlyFirestoreError(err));
@@ -341,12 +345,13 @@ export function TeacherRoomMonitor({
       soundEngine.muted = false;
       setMuted(false);
     }
+    broadcastRoomMusicTrack(room?.code || roomId, nextId);
   }
 
   const activeTrackMeta =
     RACE_MUSIC_TRACKS.find((t) => t.id === musicTrack) ?? RACE_MUSIC_TRACKS[0];
 
-  const activeVenue: RaceVenueId = venueOverride ?? room?.settings?.venue ?? 'stadium_day';
+  const activeVenue: RaceVenueId = room?.settings?.venue ?? 'stadium_day';
   const isEffectivePlaying = Boolean(
     room &&
       (room.status === 'playing' ||
@@ -507,7 +512,10 @@ export function TeacherRoomMonitor({
       <div className="px-4 sm:px-6 py-3.5 bg-[#0F2957] border-b border-blue-400/25 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <button
-            onClick={onBack}
+            onClick={() => {
+              soundEngine.stopAllRaceAudio();
+              onBack();
+            }}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#081226] border border-white/15 text-sm font-semibold hover:bg-blue-900 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -613,7 +621,10 @@ export function TeacherRoomMonitor({
           {room?.status === 'finished' && (
             <>
               <button
-                onClick={() => onOpenResults(room.id)}
+                onClick={() => {
+                  soundEngine.stopAllRaceAudio();
+                  onOpenResults(room.id);
+                }}
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1D4ED8] hover:bg-blue-600 font-semibold text-sm text-white cursor-pointer"
               >
                 <Trophy className="w-4 h-4" />
@@ -674,7 +685,7 @@ export function TeacherRoomMonitor({
               pipPlacement="bottom-row"
               onSelectCameraPreset={setCameraPreset}
               onChangeCameraViewMode={setCameraViewMode}
-              venue={venueOverride ?? room.settings.venue ?? 'stadium_day'}
+              venue={activeVenue}
             />
           )}
 
@@ -805,8 +816,8 @@ export function TeacherRoomMonitor({
                                         <Zap className="w-2.5 h-2.5" /> BOOST
                                       </span>
                                     ) : p.effectState === 'penalty' ? (
-                                      <span className="inline-flex items-center gap-0.5 text-rose-300 font-bold">
-                                        <AlertTriangle className="w-2.5 h-2.5" /> LAMBAT
+                                      <span className="inline-flex items-center gap-0.5 text-amber-300 font-bold">
+                                        <AlertTriangle className="w-2.5 h-2.5" /> JALAN SANTAI
                                       </span>
                                     ) : null}
                                   </div>
@@ -916,30 +927,6 @@ export function TeacherRoomMonitor({
                 </label>
               )}
             </div>
-
-            {room && (
-              <div className="inline-flex items-center p-1 rounded-xl bg-[#081226]/92 border border-white/20 pointer-events-auto">
-                {RACE_VENUES.map((v) => {
-                  const activeVenue = venueOverride ?? room.settings.venue ?? 'stadium_day';
-                  const active = activeVenue === v.id;
-                  const Icon =
-                    v.id === 'stadium_day' ? Sun : v.id === 'stadium_night' ? Moon : Trees;
-                  return (
-                    <button
-                      key={v.id}
-                      type="button"
-                      onClick={() => setVenueOverride(v.id)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                        active ? 'bg-[#1D4ED8] text-white' : 'text-slate-300 hover:bg-white/10'
-                      }`}
-                    >
-                      <Icon className="w-3.5 h-3.5" />
-                      <span>{v.shortLabel}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
 

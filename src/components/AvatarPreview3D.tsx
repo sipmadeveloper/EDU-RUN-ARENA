@@ -2,7 +2,13 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { AvatarConfig } from '../types/game';
 import { createBlockyRunner, animateBlockyRunner, type BlockyRunnerRig } from '../three/createBlockyRunner';
-import { applyStudioEnvironment, createConfiguredRenderer, afterDraw } from '../three/webglGuard';
+import {
+  applyStudioEnvironment,
+  createConfiguredRenderer,
+  disposeConfiguredRenderer,
+  afterDraw,
+  cancelAfterDraw,
+} from '../three/webglGuard';
 
 interface AvatarPreview3DProps {
   avatar: AvatarConfig;
@@ -47,7 +53,15 @@ export function AvatarPreview3D({
     camera.position.set(0, 1.95, 4.75);
     camera.lookAt(0, 1.32, 0);
 
-    const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
+    let renderer: THREE.WebGLRenderer;
+    let isSoftwareGl = false;
+    try {
+      const cfg = createConfiguredRenderer(container);
+      renderer = cfg.renderer;
+      isSoftwareGl = cfg.isSoftwareGl;
+    } catch {
+      return;
+    }
     const disposeEnv = applyStudioEnvironment(scene, renderer);
 
     // 3-point stadium preview lighting
@@ -130,6 +144,7 @@ export function AvatarPreview3D({
       disposed = true;
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      cancelAfterDraw(renderer);
       resizeObs.disconnect();
       if (rig) rig.dispose();
       baseGeo.dispose();
@@ -137,10 +152,7 @@ export function AvatarPreview3D({
       ringGeo.dispose();
       ringMat.dispose();
       disposeEnv();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === container) {
-        container.removeChild(renderer.domElement);
-      }
+      disposeConfiguredRenderer(renderer, container);
     };
   }, []);
 

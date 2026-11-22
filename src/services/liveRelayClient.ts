@@ -6,6 +6,7 @@ export interface LiveRelayRoomPatch {
   startedAtMs?: number;
   finishedAtMs?: number;
   participantCount?: number;
+  musicTrack?: 'semangat_juara' | 'lari_ceria' | 'turbo_arena';
   updatedAtMs?: number;
 }
 

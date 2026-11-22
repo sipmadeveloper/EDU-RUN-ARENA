@@ -1006,6 +1006,97 @@ function createPresetTorsoTexture(presetId: Exclude<AvatarPresetId, 'custom'>): 
   return tex;
 }
 
+function drawStylizedNose(
+  ctx: CanvasRenderingContext2D,
+  style: 'standard' | 'marker' | 'noob' = 'standard'
+) {
+  ctx.save();
+  if (style === 'marker') {
+    // Crisp marker-drawn nose for cardboard robot
+    ctx.fillStyle = '#5C3A1E';
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(128, 124);
+    ctx.lineTo(116, 150);
+    ctx.lineTo(140, 150);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else if (style === 'noob') {
+    // Playful bold cartoon nose for classic noob
+    ctx.fillStyle = 'rgba(180, 118, 22, 0.34)';
+    ctx.beginPath();
+    ctx.ellipse(128, 134, 11, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(128, 132, 9, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+  } else {
+    // Soft warm bridge highlight + clear curved nose contour & subtle nostrils
+    ctx.fillStyle = 'rgba(130, 68, 36, 0.24)';
+    ctx.beginPath();
+    ctx.ellipse(128, 137, 11, 7.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(104, 52, 26, 0.82)';
+    ctx.lineWidth = 5.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(128, 121);
+    ctx.quadraticCurveTo(134, 132, 128, 139);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(128, 134, 9.5, 0.22 * Math.PI, 0.78 * Math.PI);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(92, 44, 20, 0.65)';
+    ctx.beginPath();
+    ctx.arc(122.5, 140.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(133.5, 140.5, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawExpressiveEyes(ctx: CanvasRenderingContext2D, centerY = 108, irisHex = '#3B82F6') {
+  // Eyebrows
+  ctx.strokeStyle = '#1E293B';
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(62, centerY - 34);
+  ctx.quadraticCurveTo(84, centerY - 44, 104, centerY - 36);
+  ctx.moveTo(194, centerY - 34);
+  ctx.quadraticCurveTo(172, centerY - 44, 152, centerY - 36);
+  ctx.stroke();
+
+  for (const ex of [84, 172]) {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.ellipse(ex, centerY, 18, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.ellipse(ex, centerY, 14, 19, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = irisHex;
+    ctx.beginPath();
+    ctx.arc(ex, centerY + 8, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(ex - 5, centerY - 8, 5.2, 0, Math.PI * 2);
+    ctx.arc(ex + 5, centerY + 4, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function createPresetFaceTexture(
   skinHex: string,
   faceKind: PresetAppearance['faceKind']
@@ -1019,16 +1110,36 @@ function createPresetFaceTexture(
   ctx.fillRect(0, 0, 256, 256);
 
   if (faceKind === 'knight_visor') {
+    // Royal open-faced golden knight helm framing clear eyes, nose, and heroic smile
     ctx.fillStyle = '#FACC15';
     ctx.fillRect(0, 0, 256, 256);
     ctx.fillStyle = '#DC2626';
-    ctx.fillRect(18, 24, 220, 212);
+    ctx.fillRect(10, 14, 236, 228);
+    // Face opening cutout showing warm skin
+    ctx.fillStyle = '#F3C5A2';
+    ctx.beginPath();
+    ctx.roundRect(30, 52, 196, 166, 28);
+    ctx.fill();
+    // Golden helmet brow guard & nose-guard crown trim (above eyes)
     ctx.fillStyle = '#FACC15';
-    ctx.fillRect(114, 0, 28, 256);
-    // T-visor slit
-    ctx.fillStyle = '#0F172A';
-    ctx.fillRect(38, 92, 180, 32);
-    ctx.fillRect(110, 92, 36, 128);
+    ctx.fillRect(10, 0, 236, 56);
+    ctx.strokeStyle = '#FACC15';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.roundRect(30, 52, 196, 166, 28);
+    ctx.stroke();
+
+    // Eyes, nose, and confident knight smile clearly visible
+    drawExpressiveEyes(ctx, 108, '#2563EB');
+    drawStylizedNose(ctx, 'standard');
+
+    ctx.strokeStyle = '#7C2D12';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(128, 162, 28, 0.16 * Math.PI, 0.84 * Math.PI);
+    ctx.stroke();
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
@@ -1040,16 +1151,34 @@ function createPresetFaceTexture(
     ctx.strokeStyle = '#7C532E';
     ctx.lineWidth = 8;
     ctx.strokeRect(4, 4, 248, 248);
-    // Marker drawn square eyes & mouth
+    // Marker-drawn expressive eyes with crisp catchlights
     ctx.fillStyle = '#111827';
-    ctx.fillRect(64, 72, 42, 62);
-    ctx.fillRect(150, 72, 42, 62);
+    ctx.beginPath();
+    ctx.roundRect(58, 70, 44, 54, 8);
+    ctx.roundRect(154, 70, 44, 54, 8);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(68, 80, 12, 12);
+    ctx.fillRect(164, 80, 12, 12);
+
+    // Clear marker-drawn nose
+    drawStylizedNose(ctx, 'marker');
+
+    // Marker-drawn smiling robot mouth
+    ctx.fillStyle = '#FEF3C7';
+    ctx.fillRect(72, 170, 112, 30);
     ctx.strokeStyle = '#111827';
     ctx.lineWidth = 7;
-    ctx.strokeRect(72, 168, 112, 30);
+    ctx.strokeRect(72, 170, 112, 30);
     ctx.beginPath();
-    ctx.moveTo(72, 183);
-    ctx.lineTo(184, 183);
+    ctx.moveTo(72, 185);
+    ctx.lineTo(184, 185);
+    ctx.moveTo(100, 170);
+    ctx.lineTo(100, 200);
+    ctx.moveTo(128, 170);
+    ctx.lineTo(128, 200);
+    ctx.moveTo(156, 170);
+    ctx.lineTo(156, 200);
     ctx.stroke();
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1057,7 +1186,7 @@ function createPresetFaceTexture(
   }
 
   if (faceKind === 'noob_face') {
-    // Raised worried eyebrows & wavy Noob mouth
+    // Raised eyebrows, clear oval eyes, cute nose, and classic playful mouth
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 10;
     ctx.lineCap = 'round';
@@ -1070,18 +1199,26 @@ function createPresetFaceTexture(
 
     ctx.fillStyle = '#0F172A';
     ctx.beginPath();
-    ctx.ellipse(82, 102, 14, 22, 0, 0, Math.PI * 2);
-    ctx.ellipse(174, 102, 14, 22, 0, 0, Math.PI * 2);
+    ctx.ellipse(82, 102, 15, 22, 0, 0, Math.PI * 2);
+    ctx.ellipse(174, 102, 15, 22, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(77, 94, 4.5, 0, Math.PI * 2);
+    ctx.arc(169, 94, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Clear stylized nose
+    drawStylizedNose(ctx, 'noob');
 
     ctx.fillStyle = '#7F1D1D';
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 8;
     ctx.beginPath();
-    ctx.moveTo(64, 184);
-    ctx.quadraticCurveTo(96, 146, 128, 168);
-    ctx.quadraticCurveTo(160, 146, 192, 184);
-    ctx.quadraticCurveTo(128, 198, 64, 184);
+    ctx.moveTo(64, 186);
+    ctx.quadraticCurveTo(96, 152, 128, 172);
+    ctx.quadraticCurveTo(160, 152, 192, 186);
+    ctx.quadraticCurveTo(128, 202, 64, 186);
     ctx.fill();
     ctx.stroke();
 
@@ -1091,27 +1228,27 @@ function createPresetFaceTexture(
   }
 
   if (faceKind === 'cyber_mask') {
-    // Crisp eyes above red-black respirator mask
-    ctx.fillStyle = '#0F172A';
-    ctx.fillRect(68, 84, 30, 32);
-    ctx.fillRect(158, 84, 30, 32);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(74, 88, 10, 10);
-    ctx.fillRect(164, 88, 10, 10);
+    // Expressive cyber-racer face with glowing eyes, visible nose & smile, plus sleek chin/cheek tech accents
+    drawExpressiveEyes(ctx, 106, '#06B6D4');
+    drawStylizedNose(ctx, 'standard');
 
-    // Respirator mask lower half
+    // Confident athletic smile clearly visible above the tech chin guard
+    ctx.strokeStyle = '#7C2D12';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(128, 160, 28, 0.16 * Math.PI, 0.84 * Math.PI);
+    ctx.stroke();
+
+    // Sleek cyber-racer cheek strips & chin collar guard (never obscures eyes, nose, or mouth)
     ctx.fillStyle = '#111827';
-    ctx.fillRect(38, 144, 180, 92);
+    ctx.fillRect(14, 150, 26, 42);
+    ctx.fillRect(216, 150, 26, 42);
+    ctx.fillRect(46, 212, 164, 44);
     ctx.fillStyle = '#DC2626';
-    ctx.beginPath();
-    ctx.arc(84, 188, 28, 0, Math.PI * 2);
-    ctx.arc(172, 188, 28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#334155';
-    ctx.beginPath();
-    ctx.arc(84, 188, 14, 0, Math.PI * 2);
-    ctx.arc(172, 188, 14, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(20, 158, 14, 10);
+    ctx.fillRect(222, 158, 14, 10);
+    ctx.fillRect(72, 224, 112, 12);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1142,6 +1279,7 @@ function createPresetFaceTexture(
     ctx.arc(174, 84, 20, Math.PI * 1.2, Math.PI * 1.8);
     ctx.stroke();
 
+    // Cheerful smiling eyes
     ctx.strokeStyle = '#0F172A';
     ctx.lineWidth = 10;
     ctx.lineCap = 'round';
@@ -1152,87 +1290,71 @@ function createPresetFaceTexture(
     ctx.arc(174, 118, 22, Math.PI * 1.15, Math.PI * 1.85);
     ctx.stroke();
 
+    // Clear stylized nose
+    drawStylizedNose(ctx, 'standard');
+
     // Cheerful open mouth
     ctx.fillStyle = '#991B1B';
     ctx.beginPath();
-    ctx.arc(128, 158, 30, 0, Math.PI);
+    ctx.arc(128, 162, 30, 0, Math.PI);
     ctx.fill();
     ctx.fillStyle = '#F87171';
     ctx.beginPath();
-    ctx.arc(128, 174, 16, Math.PI, 0);
+    ctx.arc(128, 178, 16, Math.PI, 0);
     ctx.fill();
   } else if (faceKind === 'shades') {
-    // Sleek rounded sports sunglasses
+    // Draw expressive eyes FIRST so they remain clearly visible through semi-transparent sports lenses
+    drawExpressiveEyes(ctx, 108, '#38BDF8');
+
+    // Semi-transparent tinted sports sunglasses with crisp rim
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.36)';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.roundRect(38, 84, 80, 48, 16);
+    ctx.roundRect(138, 84, 80, 48, 16);
+    ctx.fill();
+    ctx.stroke();
     ctx.fillStyle = '#0F172A';
+    ctx.fillRect(116, 98, 24, 9);
+    ctx.fillStyle = 'rgba(255,255,255,0.26)';
     ctx.beginPath();
-    ctx.roundRect(34, 84, 84, 48, 16);
-    ctx.roundRect(138, 84, 84, 48, 16);
+    ctx.roundRect(48, 90, 24, 8, 4);
+    ctx.roundRect(148, 90, 24, 8, 4);
     ctx.fill();
-    ctx.fillRect(114, 98, 28, 12);
-    ctx.fillStyle = 'rgba(255,255,255,0.28)';
-    ctx.beginPath();
-    ctx.roundRect(46, 92, 28, 10, 5);
-    ctx.roundRect(150, 92, 28, 10, 5);
-    ctx.fill();
+
+    // Clear stylized nose
+    drawStylizedNose(ctx, 'standard');
+
     // Confident smile
     ctx.strokeStyle = '#7C2D12';
     ctx.lineWidth = 8;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(128, 158, 32, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.arc(128, 162, 32, 0.15 * Math.PI, 0.85 * Math.PI);
     ctx.stroke();
   } else {
-    // Glossy stylized oval eyes with expressive eyebrows & double catchlight highlights
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 7;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(62, 76);
-    ctx.quadraticCurveTo(84, 66, 104, 74);
-    ctx.moveTo(194, 76);
-    ctx.quadraticCurveTo(172, 66, 152, 74);
-    ctx.stroke();
-
-    for (const ex of [84, 172]) {
-      // Eye sclera subtle highlight
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.ellipse(ex, 112, 18, 22, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Deep glossy iris
-      ctx.fillStyle = '#0F172A';
-      ctx.beginPath();
-      ctx.ellipse(ex, 112, 14, 19, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Subtle lower iris shine
-      ctx.fillStyle = '#3B82F6';
-      ctx.beginPath();
-      ctx.arc(ex, 120, 6, 0, Math.PI * 2);
-      ctx.fill();
-      // Dual sparkle catchlights
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.arc(ex - 5, 104, 5.2, 0, Math.PI * 2);
-      ctx.arc(ex + 5, 116, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    drawExpressiveEyes(ctx, 110, '#3B82F6');
 
     if (faceKind === 'female_classic') {
       ctx.strokeStyle = '#0F172A';
       ctx.lineWidth = 6;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(62, 98);
-      ctx.lineTo(74, 88);
-      ctx.moveTo(194, 98);
-      ctx.lineTo(182, 88);
+      ctx.moveTo(62, 96);
+      ctx.lineTo(74, 86);
+      ctx.moveTo(194, 96);
+      ctx.lineTo(182, 86);
       ctx.stroke();
     }
+
+    // Clear stylized nose on every classic / female / grin / smirk face
+    drawStylizedNose(ctx, 'standard');
 
     if (faceKind === 'open_grin') {
       ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
-      ctx.arc(128, 156, 32, 0, Math.PI);
+      ctx.arc(128, 160, 32, 0, Math.PI);
       ctx.fill();
       ctx.strokeStyle = '#0F172A';
       ctx.lineWidth = 6;
@@ -1242,15 +1364,15 @@ function createPresetFaceTexture(
       ctx.lineWidth = 8;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(96, 174);
-      ctx.quadraticCurveTo(138, 182, 168, 158);
+      ctx.moveTo(96, 178);
+      ctx.quadraticCurveTo(138, 186, 168, 162);
       ctx.stroke();
     } else {
       ctx.strokeStyle = '#7C2D12';
       ctx.lineWidth = 8;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.arc(128, 156, 30, 0.16 * Math.PI, 0.84 * Math.PI);
+      ctx.arc(128, 160, 30, 0.16 * Math.PI, 0.84 * Math.PI);
       ctx.stroke();
     }
   }
@@ -1518,15 +1640,21 @@ export function createBlockyRunner(
     earR.scale.set(0.058, 0.095, 0.072);
     earR.position.set(0.34, 0.34, -0.02);
     headGroup.add(earL, earR);
-
-    // Subtle sculpted 3D nose bump (skip for respirator mask)
-    if (preset?.faceKind !== 'cyber_mask') {
-      const nose = new THREE.Mesh(SHARED_SPHERE, skinMat);
-      nose.scale.set(0.042, 0.036, 0.044);
-      nose.position.set(0, 0.32, 0.342);
-      headGroup.add(nose);
-    }
   }
+
+  // Sculpted 3D nose guaranteed on EVERY character (all presets + custom avatars)
+  const noseBaseColor = new THREE.Color(
+    preset?.faceKind === 'knight_visor'
+      ? '#F3C5A2'
+      : isBoxyBot
+      ? '#B78451'
+      : skinColor
+  ).multiplyScalar(0.92);
+  const noseMat = makeMat(noseBaseColor.getHex(), 0.62, 0.03);
+  const nose = new THREE.Mesh(SHARED_SPHERE, noseMat);
+  nose.scale.set(0.048, 0.04, 0.052);
+  nose.position.set(0, 0.32, isBoxyBot ? 0.365 : 0.348);
+  headGroup.add(nose);
 
   // --- ORGANIC SCULPTED HAIR SILHOUETTES ---
   const hairStyle = preset ? preset.hairStyle : avatar.gender === 'female' ? 'ponytail' : 'short';
@@ -2141,23 +2269,28 @@ export function animateBlockyRunner(
     return;
   }
 
-  if (mode === 'walk') {
-    const freq = 5.8;
-    const swing = Math.sin(t * freq) * 0.54;
-    rig.bodyPivot.position.y = Math.abs(Math.sin(t * freq)) * 0.032;
-    rig.bodyPivot.rotation.x = 0.045;
+  if (mode === 'walk' || mode === 'penalty') {
+    // Relaxed casual walking gait (used for entrance walk-in AND wrong-answer penalty)
+    const freq = mode === 'penalty' ? 4.8 : 5.8;
+    const amp = mode === 'penalty' ? 0.5 : 0.54;
+    const swing = Math.sin(t * freq) * amp;
+    rig.bodyPivot.position.y = Math.abs(Math.sin(t * freq)) * (mode === 'penalty' ? 0.026 : 0.032);
+    rig.bodyPivot.rotation.x = mode === 'penalty' ? 0.035 : 0.045;
     rig.leftLegPivot.rotation.x = swing;
     rig.rightLegPivot.rotation.x = -swing;
-    rig.leftArmPivot.rotation.x = -swing * 0.72;
-    rig.rightArmPivot.rotation.x = swing * 0.72;
-    rig.headGroup.rotation.y = Math.sin(t * 1.55) * 0.14;
+    rig.leftArmPivot.rotation.x = -swing * (mode === 'penalty' ? 0.68 : 0.72);
+    rig.rightArmPivot.rotation.x = swing * (mode === 'penalty' ? 0.68 : 0.72);
+    rig.headGroup.rotation.y = Math.sin(t * (mode === 'penalty' ? 1.35 : 1.55)) * (mode === 'penalty' ? 0.08 : 0.14);
     return;
   }
 
-  const freq = mode === 'boost' ? 16.5 : mode === 'penalty' ? 3.0 : 8.2;
-  const amp = mode === 'boost' ? 1.08 : mode === 'penalty' ? 0.3 : 0.68;
-  const lean = mode === 'boost' ? 0.28 : mode === 'penalty' ? 0.02 : 0.1;
-  const bounce = mode === 'boost' ? 0.12 : mode === 'penalty' ? 0.015 : 0.05;
+  // 'normal' = relaxed steady jog; 'boost' = energetic fast sprint
+  const isBoost = mode === 'boost';
+  const freq = isBoost ? 16.5 : 7.4;
+  const amp = isBoost ? 1.08 : 0.62;
+  const lean = isBoost ? 0.28 : 0.09;
+  const bounce = isBoost ? 0.12 : 0.045;
+  const armRatio = isBoost ? 0.95 : 0.84;
 
   const swing = Math.sin(t * freq) * amp;
   rig.bodyPivot.position.y = Math.abs(Math.sin(t * freq)) * bounce;
@@ -2165,12 +2298,7 @@ export function animateBlockyRunner(
 
   rig.leftLegPivot.rotation.x = swing;
   rig.rightLegPivot.rotation.x = -swing;
-  rig.leftArmPivot.rotation.x = -swing * 0.9;
-  rig.rightArmPivot.rotation.x = swing * 0.9;
-
-  if (mode === 'penalty') {
-    rig.headGroup.rotation.y = Math.sin(t * 6) * 0.15;
-  } else {
-    rig.headGroup.rotation.y = 0;
-  }
+  rig.leftArmPivot.rotation.x = -swing * armRatio;
+  rig.rightArmPivot.rotation.x = swing * armRatio;
+  rig.headGroup.rotation.y = 0;
 }

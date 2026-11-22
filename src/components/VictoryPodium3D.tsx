@@ -23,7 +23,17 @@ import {
   type MedalTier,
 } from '../three/medalCeremony';
 import { soundEngine } from '../audio/soundEngine';
-import { applyStudioEnvironment, createConfiguredRenderer, afterDraw } from '../three/webglGuard';
+import {
+  applyStudioEnvironment,
+  createConfiguredRenderer,
+  disposeConfiguredRenderer,
+  afterDraw,
+  cancelAfterDraw,
+} from '../three/webglGuard';
+import {
+  createPodiumBackdropTexture,
+  type PodiumBackdropWinner,
+} from '../three/renderPodiumBackdrop';
 
 interface VictoryPodium3DProps {
   topThree?: PlayerState[];
@@ -185,6 +195,26 @@ export function VictoryPodium3D({
   const focusKeyRef = useRef(focusKey);
   focusKeyRef.current = focusKey;
 
+  const backdropHandleRef = useRef<{
+    updateWinners: (next: PodiumBackdropWinner[]) => void;
+  } | null>(null);
+
+  const backdropWinners = useMemo<PodiumBackdropWinner[]>(
+    () =>
+      rankedList.slice(0, 30).map((p, idx) => ({
+        rank: p.scoreRank && p.scoreRank >= 1 && p.scoreRank <= 30 ? p.scoreRank : idx + 1,
+        name: p.name,
+        score: p.score,
+      })),
+    [rankedList]
+  );
+  const backdropWinnersRef = useRef<PodiumBackdropWinner[]>(backdropWinners);
+  backdropWinnersRef.current = backdropWinners;
+
+  useEffect(() => {
+    backdropHandleRef.current?.updateWinners(backdropWinners);
+  }, [backdropWinners]);
+
   const replayRequestRef = useRef(0);
 
   // Reset camera focus safely if selected target disappears
@@ -245,7 +275,15 @@ export function VictoryPodium3D({
     camera.position.set(wideCenterX, wideY, wideZ);
     camera.lookAt(wideCenterX, 1.9, 0.4);
 
-    const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
+    let renderer: THREE.WebGLRenderer;
+    let isSoftwareGl = false;
+    try {
+      const cfg = createConfiguredRenderer(container);
+      renderer = cfg.renderer;
+      isSoftwareGl = cfg.isSoftwareGl;
+    } catch {
+      return;
+    }
     const disposeEnv = applyStudioEnvironment(scene, renderer);
 
     const hemi = new THREE.HemisphereLight(0x93c5fd, 0x0f172a, 0.95);
@@ -588,6 +626,57 @@ export function VictoryPodium3D({
       disposables.push(bGeo, btGeo);
     }
 
+    // Victory podium backdrop wall: Ranks 1–15 (left) | App Logo (center) | Ranks 16–30 (right)
+    const backdropAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    const backdropCtrl = createPodiumBackdropTexture(backdropWinnersRef.current, backdropAniso);
+    backdropHandleRef.current = backdropCtrl;
+
+    const backdropW = 14.2;
+    const backdropH = backdropW * (840 / 1920);
+    const backdropY = STAGE_TOP_Y + backdropH / 2 + 0.52;
+    const backdropZ = -2.85;
+
+    const bdFrameGeo = new THREE.BoxGeometry(backdropW + 0.48, backdropH + 0.48, 0.28);
+    const bdFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x07132b,
+      roughness: 0.42,
+      metalness: 0.35,
+    });
+    const bdFrame = new THREE.Mesh(bdFrameGeo, bdFrameMat);
+    bdFrame.position.set(wideCenterX, backdropY, backdropZ - 0.16);
+    scene.add(bdFrame);
+
+    const bdPillarGeo = new THREE.BoxGeometry(0.32, backdropH + 0.95, 0.36);
+    const bdBeamGeo = new THREE.BoxGeometry(backdropW + 1.05, 0.34, 0.38);
+    const bdPillarL = new THREE.Mesh(bdPillarGeo, goldTrimMat);
+    bdPillarL.position.set(wideCenterX - backdropW / 2 - 0.36, STAGE_TOP_Y + (backdropH + 0.95) / 2, backdropZ - 0.12);
+    const bdPillarR = new THREE.Mesh(bdPillarGeo, goldTrimMat);
+    bdPillarR.position.set(wideCenterX + backdropW / 2 + 0.36, STAGE_TOP_Y + (backdropH + 0.95) / 2, backdropZ - 0.12);
+    const bdTopBeam = new THREE.Mesh(bdBeamGeo, goldTrimMat);
+    bdTopBeam.position.set(wideCenterX, backdropY + backdropH / 2 + 0.34, backdropZ - 0.12);
+    scene.add(bdPillarL, bdPillarR, bdTopBeam);
+
+    const bdScreenGeo = new THREE.PlaneGeometry(backdropW, backdropH);
+    const bdScreenMat = new THREE.MeshBasicMaterial({ map: backdropCtrl.texture });
+    const bdScreen = new THREE.Mesh(bdScreenGeo, bdScreenMat);
+    bdScreen.position.set(wideCenterX, backdropY, backdropZ);
+    scene.add(bdScreen);
+
+    disposables.push(
+      {
+        dispose: () => {
+          backdropHandleRef.current = null;
+          backdropCtrl.dispose();
+        },
+      },
+      bdFrameGeo,
+      bdFrameMat,
+      bdPillarGeo,
+      bdBeamGeo,
+      bdScreenGeo,
+      bdScreenMat
+    );
+
     // Formal VIP Medal Presenter wearing tailored dark suit jacket, crisp white formal shirt & tie, and black trousers
     const presenter = createFormalPresenterRig(!isSoftwareGl);
     const presenterStartPos = { x: 4.35, z: WALK_Z };
@@ -853,7 +942,9 @@ export function VictoryPodium3D({
       disposed = true;
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      cancelAfterDraw(renderer);
       resizeObs.disconnect();
+      backdropHandleRef.current = null;
       presenter.dispose();
       rigs.forEach((r) => {
         r.wornMedal?.dispose();
@@ -861,10 +952,7 @@ export function VictoryPodium3D({
       });
       disposables.forEach((d) => d.dispose());
       disposeEnv();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === container) {
-        container.removeChild(renderer.domElement);
-      }
+      disposeConfiguredRenderer(renderer, container);
     };
   }, [sceneSignature, hasFourth, localIsExtraFinisher]);
 

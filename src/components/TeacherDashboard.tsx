@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   LayoutDashboard,
   PlusSquare,
@@ -197,20 +197,45 @@ export function TeacherDashboard({
     });
   }, []);
 
+  const isMountedRef = useRef(true);
+  const bannerTimerRef = useRef<number | null>(null);
+  const selectedResultRoomIdRef = useRef(selectedResultRoomId);
+  selectedResultRoomIdRef.current = selectedResultRoomId;
+  const [resultsRefreshTick, setResultsRefreshTick] = useState(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (bannerTimerRef.current !== null) {
+        window.clearTimeout(bannerTimerRef.current);
+      }
+    };
+  }, []);
+
   const notify = useCallback((kind: 'ok' | 'err', text: string) => {
+    if (!isMountedRef.current) return;
+    if (bannerTimerRef.current !== null) {
+      window.clearTimeout(bannerTimerRef.current);
+    }
     setBannerMsg({ kind, text });
-    window.setTimeout(() => setBannerMsg(null), 4000);
+    bannerTimerRef.current = window.setTimeout(() => {
+      if (isMountedRef.current) setBannerMsg(null);
+    }, 4000);
   }, []);
 
   const fetchAll = useCallback(async () => {
+    if (!isMountedRef.current) return;
     setLoadingData(true);
     try {
       const [roomList, cloudBank] = await Promise.all([
         listTeacherRooms(teacher.id),
         loadQuestionBankFromCloud(teacher.id),
       ]);
+      if (!isMountedRef.current) return;
       setRooms(roomList);
-      if (!selectedResultRoomId && roomList.length > 0) {
+      const currentSelected = selectedResultRoomIdRef.current;
+      if ((!currentSelected || !roomList.some((r) => r.id === currentSelected)) && roomList.length > 0) {
         setSelectedResultRoomId(roomList[0].id);
       }
       const mappedQuestions: QuestionItem[] = cloudBank.questions.map((q) => ({
@@ -225,27 +250,38 @@ export function TeacherDashboard({
       }));
       setQuestions(mappedQuestions);
     } catch (err) {
-      notify('err', formatFriendlyFirestoreError(err));
+      if (isMountedRef.current) {
+        notify('err', formatFriendlyFirestoreError(err));
+      }
     } finally {
-      setLoadingData(false);
+      if (isMountedRef.current) {
+        setLoadingData(false);
+      }
     }
-  }, [teacher.id, notify, selectedResultRoomId]);
+  }, [teacher.id, notify]);
 
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
 
   useEffect(() => {
-    if (activeTab === 'results' && selectedResultRoomId) {
-      getFirebaseRoomResults(selectedResultRoomId)
-        .then((data) => {
+    if (monitoringRoomId || activeTab !== 'results' || !selectedResultRoomId) return;
+    let cancelled = false;
+    getFirebaseRoomResults(selectedResultRoomId)
+      .then((data) => {
+        if (!cancelled && isMountedRef.current) {
           setResultDetail(data);
-        })
-        .catch(() => {
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isMountedRef.current) {
           setResultDetail(null);
-        });
-    }
-  }, [activeTab, selectedResultRoomId]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monitoringRoomId, activeTab, selectedResultRoomId, resultsRefreshTick]);
 
   if (monitoringRoomId) {
     return (
@@ -254,13 +290,15 @@ export function TeacherDashboard({
         token={token}
         onBack={() => {
           setMonitoringRoomId(null);
-          fetchAll();
+          setResultsRefreshTick((n) => n + 1);
+          void fetchAll();
         }}
         onOpenResults={(rid) => {
           setMonitoringRoomId(null);
           setSelectedResultRoomId(rid);
           setActiveTab('results');
-          fetchAll();
+          setResultsRefreshTick((n) => n + 1);
+          void fetchAll();
         }}
       />
     );
