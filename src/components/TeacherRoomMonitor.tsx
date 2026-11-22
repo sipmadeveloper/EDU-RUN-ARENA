@@ -23,6 +23,8 @@ import {
   Zap,
   AlertTriangle,
   Flag,
+  Crosshair,
+  X,
 } from 'lucide-react';
 import {
   AVATAR_COLORS,
@@ -50,8 +52,10 @@ import {
 import { formatFriendlyFirestoreError } from '../firebase';
 import {
   activatePlayingFirebaseRoom,
+  calibrateServerClock,
   downloadRoomExcelFromFirebase,
   finishFirebaseRoom,
+  getSyncedNowMs,
   projectParticipantPhysics,
   startFirebaseRoom,
   subscribeLiveRoom,
@@ -83,7 +87,8 @@ export function TeacherRoomMonitor({
   const [excelBusy, setExcelBusy] = useState(false);
   const [error, setError] = useState('');
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('broadcast');
-  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('pip');
+  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
+  const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
   const [showLiveRanking, setShowLiveRanking] = useState(true);
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [muted, setMuted] = useState(soundEngine.muted);
@@ -104,6 +109,7 @@ export function TeacherRoomMonitor({
   const roomFinishedAudioRef = useRef(false);
 
   useEffect(() => {
+    calibrateServerClock().catch(() => {});
     const unsub = subscribeLiveRoom(roomId, {
       onRoom: (nextRoom) => {
         if (!nextRoom) {
@@ -115,7 +121,7 @@ export function TeacherRoomMonitor({
         setRoom(nextRoom);
 
         if (rawParticipantsRef.current.length > 0) {
-          const now = Date.now();
+          const now = getSyncedNowMs();
           const projected = rawParticipantsRef.current.map((p) =>
             projectParticipantPhysics(p, nextRoom, now)
           );
@@ -128,6 +134,7 @@ export function TeacherRoomMonitor({
         if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
           setCameraPreset('finish');
           setCameraViewMode('single');
+          setFollowedPlayerId(null);
           if (!roomFinishedAudioRef.current) {
             roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
@@ -153,7 +160,7 @@ export function TeacherRoomMonitor({
         rawParticipantsRef.current = list;
 
         const currentRoom = rawRoomRef.current;
-        const now = Date.now();
+        const now = getSyncedNowMs();
         const projected = currentRoom
           ? list.map((p) => projectParticipantPhysics(p, currentRoom, now))
           : list;
@@ -175,7 +182,7 @@ export function TeacherRoomMonitor({
     const id = window.setInterval(() => {
       const r = rawRoomRef.current;
       if (!r) return;
-      const now = Date.now();
+      const now = getSyncedNowMs();
       const rawList = rawParticipantsRef.current;
 
       // 1. Synchronized countdown + automatic countdown -> playing status update
@@ -196,6 +203,12 @@ export function TeacherRoomMonitor({
             soundEngine.setCrowdMood('playing');
             soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
             window.setTimeout(() => setCountdownVal(null), 1100);
+            if (rawList.length > 0) {
+              const projectedNow = rawList.map((p) => projectParticipantPhysics(p, r, now));
+              livePlayersRef.current = projectedNow;
+              lastHudSyncRef.current = performance.now();
+              setPlayers(projectedNow);
+            }
           } else {
             soundEngine.setCrowdMood('countdown');
             soundEngine.playCountdownBeep(false);
@@ -208,22 +221,21 @@ export function TeacherRoomMonitor({
         }
         if (now >= r.startedAtMs && !activatingPlayingRef.current) {
           activatingPlayingRef.current = true;
-          activatePlayingFirebaseRoom(r.code, rawList.length).catch(() => {
+          activatePlayingFirebaseRoom(r.code, rawList.length, r.startedAtMs).catch(() => {
             activatingPlayingRef.current = false;
           });
         }
       }
 
-      // 2. Project 60 FPS runner positions
+      // 2. Refresh Teacher HUD ranking & roster every 400ms (3D canvas runs directly at 60 FPS from rawParticipantsRef)
       const isPlayingNow =
         r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
       if (isPlayingNow && rawList.length > 0) {
-        const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
-        livePlayersRef.current = projected;
-        liveVersionRef.current += 1;
         const nowPerf = performance.now();
         if (nowPerf - lastHudSyncRef.current >= 400) {
           lastHudSyncRef.current = nowPerf;
+          const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
+          livePlayersRef.current = projected;
           setPlayers(projected);
         }
       }
@@ -335,7 +347,12 @@ export function TeacherRoomMonitor({
     RACE_MUSIC_TRACKS.find((t) => t.id === musicTrack) ?? RACE_MUSIC_TRACKS[0];
 
   const activeVenue: RaceVenueId = venueOverride ?? room?.settings?.venue ?? 'stadium_day';
-  const roomStatus = room?.status ?? 'waiting';
+  const isEffectivePlaying = Boolean(
+    room &&
+      (room.status === 'playing' ||
+        (room.status === 'countdown' && room.startedAtMs > 0 && getSyncedNowMs() >= room.startedAtMs))
+  );
+  const roomStatus: RoomStatus = isEffectivePlaying ? 'playing' : room?.status ?? 'waiting';
   const totalQuestions = room?.questionCount || 10;
   const totalLaps = room?.totalLaps ?? calcTotalLaps(totalQuestions);
 
@@ -455,6 +472,31 @@ export function TeacherRoomMonitor({
       return a.lane - b.lane;
     });
   }, [players, roomStatus]);
+
+  const followedPlayer = useMemo(
+    () => (followedPlayerId ? players.find((p) => p.id === followedPlayerId) ?? null : null),
+    [followedPlayerId, players]
+  );
+
+  const followablePlayers = useMemo(
+    () =>
+      [...players]
+        .sort((a, b) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }))
+        .map((p) => ({ id: p.id, name: p.name, className: p.className })),
+    [players]
+  );
+
+  function handleSelectFollowedPlayer(playerId: string | null, toggleIfSame = false) {
+    const nextId = toggleIfSame && playerId && followedPlayerId === playerId ? null : playerId;
+    setFollowedPlayerId(nextId);
+    if (
+      nextId &&
+      cameraViewMode === 'single' &&
+      (cameraPreset === 'broadcast' || cameraPreset === 'finish')
+    ) {
+      setCameraPreset('chase');
+    }
+  }
 
   const leaderProgress = sortedByRaceRank[0]?.progress ?? 0;
   const currentLeaderLap = Math.min(totalLaps, Math.floor(leaderProgress * totalLaps) + 1);
@@ -617,11 +659,18 @@ export function TeacherRoomMonitor({
               maxPlayers={room.settings.maxPlayers}
               players={EMPTY_ARENA_PLAYERS}
               livePlayersRef={livePlayersRef}
+              liveRoomRef={rawRoomRef}
+              rawParticipantsRef={rawParticipantsRef}
               liveVersionRef={liveVersionRef}
-              roomStatus={room.status}
+              roomStatus={roomStatus}
               roomName={room.name}
               cameraPreset={cameraPreset}
               cameraViewMode={cameraViewMode}
+              followedPlayerId={followedPlayer?.id ?? null}
+              followedPlayerName={followedPlayer?.name ?? null}
+              followablePlayers={followablePlayers}
+              defaultFollowLabel="Otomatis (Terdepan)"
+              onSelectFollowedPlayer={(id) => handleSelectFollowedPlayer(id)}
               pipPlacement="bottom-row"
               onSelectCameraPreset={setCameraPreset}
               onChangeCameraViewMode={setCameraViewMode}
@@ -629,9 +678,35 @@ export function TeacherRoomMonitor({
             />
           )}
 
+          {/* Active Followed Participant Compact Indicator */}
+          {followedPlayer && cameraViewMode !== 'quad' && (
+            <div className="absolute top-3 right-3 z-30 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#081226]/92 border border-[#FF6B1A]/70 shadow-xl max-w-[260px]">
+              <Crosshair className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[#FACC15] leading-tight">
+                  Kamera Mengikuti
+                </div>
+                <div className="text-xs font-bold text-white truncate leading-tight">
+                  {followedPlayer.name}{' '}
+                  <span className="font-mono text-[10px] text-cyan-300 font-semibold">
+                    · {Math.round(followedPlayer.progress * 100)}%
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleSelectFollowedPlayer(null)}
+                className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white cursor-pointer shrink-0"
+                title="Kembali ke kamera otomatis (peserta terdepan)"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Live Race Ranking Board Overlay inside Teacher Preview */}
           {room &&
-            (room.status === 'playing' || room.status === 'countdown' || room.status === 'finished') &&
+            (roomStatus === 'playing' || roomStatus === 'countdown' || roomStatus === 'finished') &&
             sortedByRaceRank.length > 0 && (
               <div
                 className={`absolute left-3 z-30 pointer-events-auto max-w-[calc(100%-24px)] ${
@@ -649,12 +724,12 @@ export function TeacherRoomMonitor({
                       <Trophy className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
                       <div className="min-w-0">
                         <div className="font-display font-extrabold text-[11px] tracking-wide text-white leading-tight truncate">
-                          {room.status === 'finished' ? 'PERINGKAT AKHIR' : 'PERINGKAT URUTAN LIVE'}
+                          {roomStatus === 'finished' ? 'PERINGKAT AKHIR' : 'PERINGKAT URUTAN LIVE'}
                         </div>
                         <div className="text-[10px] font-mono text-cyan-300 leading-tight">
-                          {room.status === 'playing'
+                          {roomStatus === 'playing'
                             ? `Putaran ${currentLeaderLap}/${totalLaps} · ${sortedByRaceRank.length} Pelari`
-                            : room.status === 'countdown'
+                            : roomStatus === 'countdown'
                             ? `Garis Start · ${sortedByRaceRank.length} Pelari`
                             : `Selesai · ${sortedByRaceRank.length} Pelari`}
                         </div>
@@ -676,6 +751,7 @@ export function TeacherRoomMonitor({
                         const cHex =
                           AVATAR_COLORS.find((c) => c.id === p.avatar.color)?.hex || '#2563EB';
                         const pct = Math.round(p.progress * 100);
+                        const isFollowed = followedPlayer?.id === p.id;
                         const rankBadgeClass =
                           rankNum === 1
                             ? 'bg-[#FACC15] text-[#081226]'
@@ -685,7 +761,21 @@ export function TeacherRoomMonitor({
                             ? 'bg-orange-400 text-[#081226]'
                             : 'bg-slate-800 text-slate-200';
                         return (
-                          <div key={p.id} className="px-2.5 py-1.5 hover:bg-white/5">
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => handleSelectFollowedPlayer(p.id, true)}
+                            className={`w-full text-left px-2.5 py-1.5 transition-colors cursor-pointer ${
+                              isFollowed
+                                ? 'bg-[#FF6B1A]/22 border-l-2 border-[#FF6B1A]'
+                                : 'hover:bg-white/10'
+                            }`}
+                            title={
+                              isFollowed
+                                ? `Sedang mengikuti ${p.name} (klik untuk kembali ke otomatis)`
+                                : `Klik agar kamera mengikuti ${p.name}`
+                            }
+                          >
                             <div className="flex items-center justify-between gap-2 text-[11px]">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span
@@ -698,8 +788,11 @@ export function TeacherRoomMonitor({
                                   style={{ backgroundColor: cHex }}
                                 />
                                 <div className="min-w-0">
-                                  <div className="font-semibold text-white truncate leading-tight">
-                                    {p.name}
+                                  <div className="font-semibold text-white truncate leading-tight flex items-center gap-1">
+                                    <span className="truncate">{p.name}</span>
+                                    {isFollowed && (
+                                      <Crosshair className="w-3 h-3 text-[#FACC15] shrink-0" />
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-1.5 text-[10px] text-slate-300 leading-tight">
                                     <span className="truncate">{p.className}</span>
@@ -743,7 +836,7 @@ export function TeacherRoomMonitor({
                                 style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
                               />
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -802,6 +895,26 @@ export function TeacherRoomMonitor({
                     : 'Buka 4 Cam'}
                 </span>
               </button>
+
+              {followablePlayers.length > 0 && (
+                <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#081226]/92 border border-white/20 text-xs font-semibold text-white">
+                  <Crosshair className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
+                  <select
+                    aria-label="Pilih nama peserta untuk diikuti kamera"
+                    value={followedPlayer?.id ?? ''}
+                    onChange={(e) => handleSelectFollowedPlayer(e.target.value || null)}
+                    className="bg-[#081226] text-white text-xs font-semibold focus:outline-none max-w-[160px] sm:max-w-[200px] cursor-pointer"
+                  >
+                    <option value="">Ikuti: Otomatis (Terdepan)</option>
+                    {followablePlayers.map((fp) => (
+                      <option key={fp.id} value={fp.id}>
+                        {fp.name}
+                        {fp.className ? ` (${fp.className})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
 
             {room && (
@@ -839,11 +952,11 @@ export function TeacherRoomMonitor({
               </span>
             </div>
             <span className="text-xs font-semibold text-cyan-300">
-              {room?.status === 'waiting'
+              {roomStatus === 'waiting'
                 ? 'Menunggu'
-                : room?.status === 'playing'
+                : roomStatus === 'playing'
                 ? 'Berlangsung'
-                : room?.status === 'countdown'
+                : roomStatus === 'countdown'
                 ? 'Hitung Mundur'
                 : 'Selesai'}
             </span>
@@ -863,8 +976,23 @@ export function TeacherRoomMonitor({
             ) : (
               sortedByScore.map((p, idx) => {
                 const cHex = AVATAR_COLORS.find((c) => c.id === p.avatar.color)?.hex || '#2563EB';
+                const isFollowed = followedPlayer?.id === p.id;
                 return (
-                  <div key={p.id} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleSelectFollowedPlayer(p.id, true)}
+                    className={`w-full text-left py-2.5 px-2 rounded-lg flex items-center justify-between gap-2 text-xs transition-colors cursor-pointer ${
+                      isFollowed
+                        ? 'bg-[#FF6B1A]/20 ring-1 ring-inset ring-[#FF6B1A]/70'
+                        : 'hover:bg-white/5'
+                    }`}
+                    title={
+                      isFollowed
+                        ? `Kamera sedang mengikuti ${p.name} (klik untuk kembali ke otomatis)`
+                        : `Klik agar kamera live preview mengikuti ${p.name}`
+                    }
+                  >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="font-mono font-bold text-slate-400 w-5">#{idx + 1}</span>
                       <span
@@ -872,9 +1000,17 @@ export function TeacherRoomMonitor({
                         style={{ backgroundColor: cHex }}
                       />
                       <div className="min-w-0">
-                        <div className="font-semibold text-white truncate">
-                          {p.name}{' '}
-                          {!p.connected && <span className="text-[10px] text-rose-300">(Offline)</span>}
+                        <div className="font-semibold text-white truncate flex items-center gap-1.5">
+                          <span className="truncate">{p.name}</span>
+                          {!p.connected && (
+                            <span className="text-[10px] text-rose-300 shrink-0">(Offline)</span>
+                          )}
+                          {isFollowed && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-[#FF6B1A] text-[9px] font-bold text-white shrink-0">
+                              <Crosshair className="w-2.5 h-2.5" />
+                              IKUTI
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-300">
                           {p.className} · Soal {p.answeredCount}/{room?.questionCount}
@@ -890,7 +1026,7 @@ export function TeacherRoomMonitor({
                         {Math.round(p.progress * 100)}%
                       </div>
                     </div>
-                  </div>
+                  </button>
                 );
               })
             )}

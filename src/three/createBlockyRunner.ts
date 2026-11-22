@@ -13,6 +13,7 @@ import {
 
 export type RunnerAnimMode =
   | 'idle'
+  | 'walk'
   | RunnerEffectState
   | 'celebration'
   | 'trophy_lift'
@@ -2137,6 +2138,19 @@ export function animateBlockyRunner(
     rig.leftLegPivot.rotation.x = Math.sin(t * 5.2) * 0.2;
     rig.rightLegPivot.rotation.x = -Math.sin(t * 5.2) * 0.2;
     rig.headGroup.rotation.y = Math.sin(t * 3) * 0.18;
+    return;
+  }
+
+  if (mode === 'walk') {
+    const freq = 5.8;
+    const swing = Math.sin(t * freq) * 0.54;
+    rig.bodyPivot.position.y = Math.abs(Math.sin(t * freq)) * 0.032;
+    rig.bodyPivot.rotation.x = 0.045;
+    rig.leftLegPivot.rotation.x = swing;
+    rig.rightLegPivot.rotation.x = -swing;
+    rig.leftArmPivot.rotation.x = -swing * 0.72;
+    rig.rightArmPivot.rotation.x = swing * 0.72;
+    rig.headGroup.rotation.y = Math.sin(t * 1.55) * 0.14;
     return;
   }
 

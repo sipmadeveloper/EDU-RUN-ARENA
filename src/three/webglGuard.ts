@@ -31,13 +31,21 @@ export function createConfiguredRenderer(container: HTMLElement): {
     antialias: !isSoftwareGl,
     stencil: false,
     powerPreference: 'high-performance',
+    failIfMajorPerformanceCaveat: false,
   });
+  renderer.domElement.addEventListener(
+    'webglcontextlost',
+    (e) => {
+      e.preventDefault();
+    },
+    false
+  );
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
   const w = container.clientWidth || window.innerWidth;
   const h = container.clientHeight || window.innerHeight;
-  const maxDpr = w > 1440 ? 1.25 : 1.5;
+  const maxDpr = 1.25;
   renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, maxDpr));
   renderer.setSize(w, h);
   renderer.shadowMap.enabled = !isSoftwareGl;

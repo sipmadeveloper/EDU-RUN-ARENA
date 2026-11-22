@@ -716,11 +716,41 @@ service cloud.firestore {
               ])
             )
             ||
-            // Tier 2: Student updating own avatar/presence in lobby or recording answer/finish checkpoint during active race
+            // Tier 2A: Rate-limited character position checkpoint (server-enforced >= 2s cooldown)
+            (
+              getRoom(roomCode).status != 'finished'
+              && existing().finishedAt == 0
+              && request.time >= existing().updatedAt + duration.value(2, 's')
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'distance',
+                'progress',
+                'speed',
+                'effectState',
+                'effectExpiresAt',
+                'lastSyncMs',
+                'updatedAt'
+              ])
+            )
+            ||
+            // Tier 2B: Lobby presence or avatar update on reconnect
             (
               getRoom(roomCode).status != 'finished'
               && incoming().diff(existing()).affectedKeys().hasOnly([
                 'avatar',
+                'connected',
+                'updatedAt'
+              ])
+            )
+            ||
+            // Tier 2C: Authoritative answer submission or finish crossing (unthrottled, terminal-locked)
+            (
+              getRoom(roomCode).status != 'finished'
+              && existing().finishedAt == 0
+              && (
+                incoming().answeredCount > existing().answeredCount
+                || incoming().finishedAt > 0
+              )
+              && incoming().diff(existing()).affectedKeys().hasOnly([
                 'distance',
                 'progress',
                 'speed',

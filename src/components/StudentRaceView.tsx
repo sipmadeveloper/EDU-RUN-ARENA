@@ -40,6 +40,7 @@ import {
 } from './StadiumArena3D';
 import { MatchResultsModal } from './MatchResultsModal';
 import { StadiumCountdownOverlay } from './StadiumCountdownOverlay';
+import { RaceTrackProgressBar } from './RaceTrackProgressBar';
 import { Loading3D } from './Loading3D';
 import { RACE_MUSIC_TRACKS, soundEngine, type RaceMusicTrackId } from '../audio/soundEngine';
 import {
@@ -51,13 +52,20 @@ import {
   formatScoreValue,
 } from '../utils/matchScaling';
 import {
+  calibrateServerClock,
+  cancelParticipantPositionSync,
+  commitParticipantAnswer,
+  getSyncedNowMs,
+  prepareParticipantAnswer,
   projectParticipantPhysics,
-  submitParticipantAnswer,
   subscribeLiveRoom,
   syncParticipantFinished,
+  syncParticipantPosition,
   type LiveFirebaseParticipant,
   type LiveFirebaseRoom,
 } from '../services/firebaseRaceService';
+
+const EMPTY_ARENA_PLAYERS: PlayerState[] = [];
 
 interface ActiveQuestionPayload {
   index: number;
@@ -100,6 +108,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const [musicTrack, setMusicTrack] = useState<RaceMusicTrackId>(soundEngine.trackId);
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('chase');
   const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
+  const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
   const [venueOverride, setVenueOverride] = useState<RaceVenueId | null>(null);
   const [showResultsOverride, setShowResultsOverride] = useState(false);
 
@@ -128,6 +137,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
 
   // Subscribe to Firestore live room + participants in real time
   useEffect(() => {
+    calibrateServerClock().catch(() => {});
     const unsub = subscribeLiveRoom(session.roomCode, {
       onRoom: (nextRoom) => {
         if (!nextRoom) return;
@@ -138,7 +148,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
 
         // Immediately project current participants with updated room state
         if (rawParticipantsRef.current.length > 0) {
-          const now = Date.now();
+          const now = getSyncedNowMs();
           const projected = rawParticipantsRef.current.map((p) =>
             projectParticipantPhysics(p, nextRoom, now)
           );
@@ -149,8 +159,10 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         }
 
         if (nextRoom.status === 'finished' && prevRoom?.status !== 'finished') {
+          cancelParticipantPositionSync(session.roomCode, session.participantId);
           setCameraPreset('finish');
           setCameraViewMode('single');
+          setFollowedPlayerId(null);
           if (!roomFinishedAudioRef.current) {
             roomFinishedAudioRef.current = true;
             soundEngine.setHeartbeatTension(0);
@@ -171,7 +183,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         rawParticipantsRef.current = list;
 
         const currentRoom = rawRoomRef.current;
-        const now = Date.now();
+        const now = getSyncedNowMs();
         const projected = currentRoom
           ? list.map((p) => projectParticipantPhysics(p, currentRoom, now))
           : list;
@@ -186,17 +198,19 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     });
 
     return () => {
+      cancelParticipantPositionSync(session.roomCode, session.participantId);
       unsub();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
-  }, [session.roomCode]);
+  }, [session.participantId, session.roomCode]);
 
-  // Deterministic 10 Hz physics projection (60 FPS interpolation inside StadiumArena3D via ref) + synced countdown driver
+  // Synced countdown driver, 360ms HUD sync, and 0ms optimistic finish detection (60 FPS physics runs directly in StadiumArena3D)
   useEffect(() => {
     const id = window.setInterval(() => {
       const r = rawRoomRef.current;
       if (!r) return;
-      const now = Date.now();
+      const now = getSyncedNowMs();
+      const rawList = rawParticipantsRef.current;
 
       // 1. Synchronized 5 -> 4 -> 3 -> 2 -> 1 -> MULAI! countdown from room.startedAtMs
       if (r.status === 'countdown' && r.startedAtMs > 0) {
@@ -216,6 +230,12 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
             soundEngine.setCrowdMood('playing');
             soundEngine.setRaceIntensity(0.32, { allowAutoSwell: false });
             window.setTimeout(() => setCountdownVal(null), 1100);
+            if (rawList.length > 0) {
+              const projectedNow = rawList.map((p) => projectParticipantPhysics(p, r, now));
+              livePlayersRef.current = projectedNow;
+              lastHudSyncRef.current = performance.now();
+              setPlayers(projectedNow);
+            }
           } else {
             soundEngine.setCrowdMood('countdown');
             soundEngine.playCountdownBeep(false);
@@ -236,54 +256,86 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         window.setTimeout(() => setCountdownVal(null), 1100);
       }
 
-      // 2. Dead-reckoning physics projection for all participants
-      const rawList = rawParticipantsRef.current;
       if (rawList.length === 0) return;
 
       const isPlayingNow =
         r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
       if (!isPlayingNow) return;
 
-      const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
-      livePlayersRef.current = projected;
-      liveVersionRef.current += 1;
-
+      // 2. Refresh React HUD state at ~2.8 Hz (3D canvas runs directly at 60 FPS from rawParticipantsRef)
       const nowPerf = performance.now();
-      if (nowPerf - lastHudSyncRef.current >= 240) {
+      if (nowPerf - lastHudSyncRef.current >= 360) {
         lastHudSyncRef.current = nowPerf;
+        const projected = rawList.map((p) => projectParticipantPhysics(p, r, now));
+        livePlayersRef.current = projected;
         setPlayers(projected);
       }
 
-      // 3. Detect local runner crossing the finish line after completing all questions
+      // 3. Rate-limited character position checkpoint sync to Firebase (>= 2.5s cooldown + delta filter)
       const localRaw = rawList.find((p) => p.id === session.participantId);
-      const localProj = projected.find((p) => p.id === session.participantId);
+      if (localRaw && !localRaw.finishedAt && !finishingSyncRef.current) {
+        syncParticipantPosition({ room: r, participant: localRaw });
+      }
+
+      // 4. Detect local runner crossing the finish line after completing all questions (single-runner check)
       if (
         localRaw &&
-        localProj &&
         !localRaw.finishedAt &&
         !finishingSyncRef.current &&
-        localRaw.answeredCount >= r.questionCount &&
-        localProj.distance >= r.trackLength - 0.1
+        localRaw.answeredCount >= r.questionCount
       ) {
-        finishingSyncRef.current = true;
-        const alreadyFinishedCount = rawList.filter((p) => p.finishedAt && p.finishedAt > 0).length;
-        syncParticipantFinished({
-          room: r,
-          participant: localRaw,
-          alreadyFinishedCount,
-        })
-          .then(({ finishRank }) => {
-            if (!finishedCelebratedRef.current) {
-              finishedCelebratedRef.current = true;
-              soundEngine.setHeartbeatTension(0);
-              soundEngine.playCrowdCheerAndFanfare();
-              setCameraPreset('finish');
-              showToast('finish', `GARIS FINISH! POSISI #${finishRank}`);
-            }
+        const localProj = projectParticipantPhysics(localRaw, r, now);
+        if (localProj.distance >= r.trackLength - 0.1) {
+          finishingSyncRef.current = true;
+          const alreadyFinishedCount = rawList.filter((p) => p.finishedAt && p.finishedAt > 0).length;
+          const optimisticRank = alreadyFinishedCount + 1;
+          const prevRawList = rawParticipantsRef.current;
+
+          // 0ms optimistic local finish state so runner celebrates immediately while Firestore commits
+          const optimisticFinished: LiveFirebaseParticipant = {
+            ...localRaw,
+            distance: r.trackLength,
+            progress: 1,
+            speed: 0,
+            finishedAt: now,
+            durationMs: r.startedAtMs > 0 ? Math.max(0, now - r.startedAtMs) : 0,
+            finishRank: optimisticRank,
+            lastSyncMs: now,
+          };
+          const nextRawList = prevRawList.map((p) =>
+            p.id === localRaw.id ? optimisticFinished : p
+          );
+          rawParticipantsRef.current = nextRawList;
+          const nextProjected = nextRawList.map((p) => projectParticipantPhysics(p, r, now));
+          livePlayersRef.current = nextProjected;
+          liveVersionRef.current += 1;
+          lastHudSyncRef.current = performance.now();
+          setPlayers(nextProjected);
+
+          if (!finishedCelebratedRef.current) {
+            finishedCelebratedRef.current = true;
+            soundEngine.setHeartbeatTension(0);
+            soundEngine.playCrowdCheerAndFanfare();
+            setCameraPreset('finish');
+            showToast('finish', `GARIS FINISH! POSISI #${optimisticRank}`);
+          }
+
+          syncParticipantFinished({
+            room: r,
+            participant: localRaw,
+            alreadyFinishedCount,
           })
-          .catch(() => {
-            finishingSyncRef.current = false;
-          });
+            .then(({ finishRank }) => {
+              if (finishRank !== optimisticRank) {
+                showToast('finish', `GARIS FINISH! POSISI #${finishRank}`);
+              }
+            })
+            .catch(() => {
+              rawParticipantsRef.current = prevRawList;
+              liveVersionRef.current += 1;
+              finishingSyncRef.current = false;
+            });
+        }
       }
     }, 100);
 
@@ -296,7 +348,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   const isEffectivePlaying = Boolean(
     room &&
       (room.status === 'playing' ||
-        (room.status === 'countdown' && room.startedAtMs > 0 && Date.now() >= room.startedAtMs))
+        (room.status === 'countdown' && room.startedAtMs > 0 && getSyncedNowMs() >= room.startedAtMs))
   );
 
   // Gate-triggered question delivery: each question only appears once the runner crosses its 3D question gate line
@@ -304,7 +356,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     const id = window.setInterval(() => {
       const r = rawRoomRef.current;
       if (!r) return;
-      const now = Date.now();
+      const now = getSyncedNowMs();
       const playing =
         r.status === 'playing' || (r.status === 'countdown' && r.startedAtMs > 0 && now >= r.startedAtMs);
       if (!playing) return;
@@ -322,9 +374,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         now >= nextQuestionAllowedAtRef.current &&
         !submittedQuestionIndicesRef.current.has(localRaw.currentQuestionIndex)
       ) {
-        const localProj =
-          livePlayersRef.current.find((p) => p.id === session.participantId) ??
-          projectParticipantPhysics(localRaw, r, now);
+        const localProj = projectParticipantPhysics(localRaw, r, now);
         const requiredGateProgress = calcQuestionGateProgress(
           localRaw.currentQuestionIndex,
           r.questionCount
@@ -368,8 +418,9 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
       submittedQuestionIndicesRef.current.add(question.index);
       setSubmittingIdx(question.index);
 
+      let prepared;
       try {
-        const res = await submitParticipantAnswer({
+        prepared = prepareParticipantAnswer({
           room: r,
           participant: localRaw,
           questionIndex: question.index,
@@ -377,34 +428,51 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
           isTimeout,
           questionStartedAt: question.questionStartedAt,
         });
-
-        // Immediately reflect locally so runner surges without waiting for round-trip snapshot
-        rawParticipantsRef.current = rawParticipantsRef.current.map((p) =>
-          p.id === localRaw.id ? res.nextParticipant : p
-        );
-
-        if (res.isCorrect) {
-          soundEngine.playCorrectBoost();
-          const ptsText = ` (+${formatScoreValue(res.pointsEarned)} Poin)`;
-          showToast('boost', `BENAR${ptsText}! SPEED BOOST +${res.effectDurationSec} DETIK`);
-        } else if (res.isTimeout) {
-          soundEngine.playWrongPenalty();
-          showToast('penalty', `WAKTU HABIS! LARI SANGAT PELAN ${res.effectDurationSec} DETIK`);
-        } else {
-          soundEngine.playWrongPenalty();
-          showToast('penalty', `SALAH! LARI SANGAT PELAN ${res.effectDurationSec} DETIK`);
-        }
-
-        nextQuestionAllowedAtRef.current = Date.now() + QUESTION_HIDE_GAP_MS;
-        setCurrentQuestion(null);
-        setSubmittingIdx(null);
-        setShortAnswerText('');
-        if (question.index + 1 >= r.questionCount) {
-          setQuestionsCompleted(true);
-        }
       } catch {
         submittedQuestionIndicesRef.current.delete(question.index);
         setSubmittingIdx(null);
+        return;
+      }
+
+      // 0ms optimistic local boost/penalty & score update so controls feel instant while Firestore syncs in parallel
+      const prevRawList = rawParticipantsRef.current;
+      const nextRawList = prevRawList.map((p) =>
+        p.id === localRaw.id ? prepared.nextParticipant : p
+      );
+      rawParticipantsRef.current = nextRawList;
+      const syncNow = getSyncedNowMs();
+      const nextProjected = nextRawList.map((p) => projectParticipantPhysics(p, r, syncNow));
+      livePlayersRef.current = nextProjected;
+      liveVersionRef.current += 1;
+      lastHudSyncRef.current = performance.now();
+      setPlayers(nextProjected);
+
+      if (prepared.isCorrect) {
+        soundEngine.playCorrectBoost();
+        const ptsText = ` (+${formatScoreValue(prepared.pointsEarned)} Poin)`;
+        showToast('boost', `BENAR${ptsText}! SPEED BOOST +${prepared.effectDurationSec} DETIK`);
+      } else if (prepared.isTimeout) {
+        soundEngine.playWrongPenalty();
+        showToast('penalty', `WAKTU HABIS! LARI SANGAT PELAN ${prepared.effectDurationSec} DETIK`);
+      } else {
+        soundEngine.playWrongPenalty();
+        showToast('penalty', `SALAH! LARI SANGAT PELAN ${prepared.effectDurationSec} DETIK`);
+      }
+
+      nextQuestionAllowedAtRef.current = getSyncedNowMs() + QUESTION_HIDE_GAP_MS;
+      setCurrentQuestion(null);
+      setSubmittingIdx(null);
+      setShortAnswerText('');
+      if (question.index + 1 >= r.questionCount) {
+        setQuestionsCompleted(true);
+      }
+
+      try {
+        await commitParticipantAnswer(r.roomCode, localRaw.id, prepared.updatePayload);
+      } catch {
+        // Roll back only if Firestore write fails
+        rawParticipantsRef.current = prevRawList;
+        submittedQuestionIndicesRef.current.delete(question.index);
       }
     },
     [session.participantId, showToast]
@@ -413,7 +481,7 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
   // Per-second UI countdown for active question (auto-submits timeout) & boost/penalty timer
   useEffect(() => {
     const id = window.setInterval(() => {
-      const now = Date.now();
+      const now = getSyncedNowMs();
       if (currentQuestion) {
         const elapsedSec = (now - currentQuestion.questionStartedAt) / 1000;
         const left = Math.max(0, Math.ceil(currentQuestion.timeLimit - elapsedSec));
@@ -609,6 +677,19 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
     audioTelemetry.heartbeatTension,
   ]);
 
+  const followedPlayer = useMemo(
+    () => (followedPlayerId ? players.find((p) => p.id === followedPlayerId) ?? null : null),
+    [followedPlayerId, players]
+  );
+
+  const followablePlayers = useMemo(
+    () =>
+      [...players]
+        .sort((a, b) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }))
+        .map((p) => ({ id: p.id, name: p.name, className: p.className })),
+    [players]
+  );
+
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#081226] select-none">
       {/* Isolated Fullscreen 3D Stadium Viewport */}
@@ -616,10 +697,19 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
         <StadiumArena3D
           questionCount={totalQuestions}
           maxPlayers={room?.settings?.maxPlayers || 30}
-          players={players}
+          players={EMPTY_ARENA_PLAYERS}
           livePlayersRef={livePlayersRef}
+          liveRoomRef={rawRoomRef}
+          rawParticipantsRef={rawParticipantsRef}
           liveVersionRef={liveVersionRef}
           localPlayerId={session.participantId}
+          followedPlayerId={followedPlayer?.id ?? null}
+          followedPlayerName={followedPlayer?.name ?? null}
+          followablePlayers={followablePlayers}
+          defaultFollowLabel={`Diri Sendiri (${session.name})`}
+          onSelectFollowedPlayer={(id) =>
+            setFollowedPlayerId(id === session.participantId ? null : id)
+          }
           roomStatus={roomStatus}
           roomName={room?.name || 'EDU RUN ARENA 3D'}
           cameraPreset={cameraPreset}
@@ -791,8 +881,22 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
       {/* ==================== ACTIVE PLAYING HUD ==================== */}
       {isEffectivePlaying && (
         <div className="absolute inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-4 pointer-events-none">
-          {/* TOP BAR PERIMETER + NON-INTRUSIVE TOAST */}
+          {/* TOP BAR PERIMETER + TRACK PROGRESS BAR + NON-INTRUSIVE TOAST */}
           <div className="space-y-2">
+            {/* Full-width Race Track Progress Bar showing every participant relative to Finish */}
+            <RaceTrackProgressBar
+              players={players}
+              localPlayerId={session.participantId}
+              followedPlayerId={followedPlayer?.id ?? null}
+              totalLaps={totalLaps}
+              trackLength={room?.trackLength ?? 400}
+              onSelectPlayer={(playerId) =>
+                setFollowedPlayerId((prev) =>
+                  playerId === session.participantId || prev === playerId ? null : playerId
+                )
+              }
+            />
+
             <div className="flex flex-wrap items-start justify-between gap-2.5">
               {/* Left: Player Card & Speed State */}
               <div className="p-2.5 sm:p-3 rounded-2xl bg-[#081226]/92 border border-blue-400/30 pointer-events-auto flex items-center gap-3">
@@ -942,19 +1046,41 @@ export function StudentRaceView({ session, onPlayAgain, onReturnLobby }: Student
                   <Trophy className="w-3.5 h-3.5" />
                 </div>
                 <div className="space-y-0.5">
-                  {sortedLeader.slice(0, 4).map((p, idx) => (
-                    <div
-                      key={p.id}
-                      className={`flex items-center justify-between text-xs px-2 py-0.5 rounded-lg ${
-                        p.id === session.participantId ? 'bg-[#FF6B1A]/25 font-bold text-white' : 'text-slate-200'
-                      }`}
-                    >
-                      <span className="truncate max-w-[110px]">
-                        {idx + 1}. {p.name}
-                      </span>
-                      <span className="font-mono text-[#FACC15] tabular-nums">{formatScoreValue(p.score)}p</span>
-                    </div>
-                  ))}
+                  {sortedLeader.slice(0, 4).map((p, idx) => {
+                    const isFollowed = followedPlayer?.id === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() =>
+                          setFollowedPlayerId((prev) =>
+                            p.id === session.participantId || prev === p.id ? null : p.id
+                          )
+                        }
+                        className={`w-full flex items-center justify-between text-xs px-2 py-0.5 rounded-lg cursor-pointer transition-colors ${
+                          isFollowed
+                            ? 'bg-cyan-500/25 ring-1 ring-cyan-400/70 font-bold text-white'
+                            : p.id === session.participantId
+                            ? 'bg-[#FF6B1A]/25 font-bold text-white hover:bg-[#FF6B1A]/35'
+                            : 'text-slate-200 hover:bg-white/10'
+                        }`}
+                        title={
+                          p.id === session.participantId
+                            ? 'Fokus kamera ke diri sendiri'
+                            : isFollowed
+                            ? `Sedang mengikuti ${p.name} (klik untuk kembali ke diri sendiri)`
+                            : `Klik agar kamera mengikuti ${p.name}`
+                        }
+                      >
+                        <span className="truncate max-w-[110px]">
+                          {idx + 1}. {p.name}
+                        </span>
+                        <span className="font-mono text-[#FACC15] tabular-nums">
+                          {formatScoreValue(p.score)}p
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>

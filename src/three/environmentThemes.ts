@@ -201,20 +201,20 @@ export function createSceneLightingRig(
 
   scene.add(hemi, keyLight, keyLight.target, rimLight);
 
-  // 2 opposing high-output stadium floodlight SpotLights aligned with the grand corner pylons
+  // 2 opposing stadium SpotLights mounted along the inner roof canopy edge (matching the 36 recessed roof-rim LED banks)
   const floodSpots: Array<{ pos: [number, number, number]; target: [number, number, number] }> = [
-    { pos: [-245, 86, 195], target: [25, 0, -15] },
-    { pos: [245, 86, -195], target: [-25, 0, 15] },
+    { pos: [-195, 53, 130], target: [20, 0, -12] },
+    { pos: [195, 53, -130], target: [-20, 0, 12] },
   ];
 
   const floodlights = floodSpots.map((cfg) => {
     const spot = new THREE.SpotLight(
       0xe8f0ff,
       initialPreset.floodlightIntensity,
-      740,
-      1.18,
+      700,
+      1.24,
       0.95,
-      1.15
+      1.12
     );
     spot.position.set(...cfg.pos);
     spot.target.position.set(...cfg.target);

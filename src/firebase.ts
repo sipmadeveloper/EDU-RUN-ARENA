@@ -6,7 +6,14 @@ import {
   signInWithPopup,
   type User,
 } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
+  type Firestore,
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 export const GOOGLE_WORKSPACE_SCOPES = [
@@ -15,7 +22,23 @@ export const GOOGLE_WORKSPACE_SCOPES = [
 
 export const app = initializeApp(firebaseConfig);
 const configuredDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
-export const db = configuredDbId ? getFirestore(app, configuredDbId) : getFirestore(app);
+
+function createOptimizedFirestore(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+        localCache: memoryLocalCache(),
+      },
+      configuredDbId
+    );
+  } catch {
+    return configuredDbId ? getFirestore(app, configuredDbId) : getFirestore(app);
+  }
+}
+
+export const db = createOptimizedFirestore();
 export const auth = getAuth(app);
 
 export const googleProvider = new GoogleAuthProvider();

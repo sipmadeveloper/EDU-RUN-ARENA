@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import { Camera, Grid2x2, Maximize2, X } from 'lucide-react';
+import { Camera, Crosshair, Grid2x2, Maximize2, X } from 'lucide-react';
 import { AVATAR_COLORS, type PlayerState, type RaceVenueId, type RoomStatus } from '../types/game';
 import {
   createStadium,
@@ -32,6 +32,13 @@ import {
 } from '../three/environmentThemes';
 import { calcTrackLength } from '../utils/matchScaling';
 import { subscribeStadiumLedConfig } from '../services/stadiumLedStore';
+import {
+  evaluateParticipantPhysics,
+  getSyncedNowMs,
+  type LiveFirebaseParticipant,
+  type LiveFirebaseRoom,
+  type LivePhysicsOut,
+} from '../services/firebaseRaceService';
 
 export type CameraPresetId = 'broadcast' | 'chase' | 'side' | 'finish';
 export type CameraViewMode = 'single' | 'pip' | 'quad';
@@ -51,13 +58,26 @@ export const CAMERA_PRESET_LIST: CameraPresetMeta[] = [
   { id: 'finish', camCode: 'CAM 4', label: 'Garis Finish', shortLabel: 'Finish' },
 ];
 
+export interface FollowablePlayerOption {
+  id: string;
+  name: string;
+  className?: string;
+}
+
 interface StadiumArena3DProps {
   questionCount: number;
   maxPlayers: number;
   players: PlayerState[];
   livePlayersRef?: MutableRefObject<PlayerState[]>;
+  liveRoomRef?: MutableRefObject<LiveFirebaseRoom | null>;
+  rawParticipantsRef?: MutableRefObject<LiveFirebaseParticipant[]>;
   liveVersionRef?: MutableRefObject<number>;
   localPlayerId?: string;
+  followedPlayerId?: string | null;
+  followedPlayerName?: string | null;
+  followablePlayers?: FollowablePlayerOption[];
+  defaultFollowLabel?: string;
+  onSelectFollowedPlayer?: (playerId: string | null) => void;
   roomStatus: RoomStatus;
   roomName?: string;
   cameraPreset?: CameraPresetId;
@@ -80,6 +100,13 @@ interface ViewportRect {
 
 const _camTarget = new THREE.Vector3();
 const _camDesired = new THREE.Vector3();
+const _physOut: LivePhysicsOut = {
+  distance: 0,
+  progress: 0,
+  speed: 0,
+  effectState: 'normal',
+  effectExpiresAt: 0,
+};
 const AVATAR_COLOR_HEX_MAP = new Map<string, string>(AVATAR_COLORS.map((c) => [c.id, c.hex]));
 
 export const StadiumArena3D = memo(function StadiumArena3D({
@@ -87,8 +114,15 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   maxPlayers,
   players,
   livePlayersRef,
+  liveRoomRef,
+  rawParticipantsRef,
   liveVersionRef,
   localPlayerId,
+  followedPlayerId = null,
+  followedPlayerName = null,
+  followablePlayers,
+  defaultFollowLabel = 'Otomatis (Terdepan)',
+  onSelectFollowedPlayer,
   roomStatus,
   roomName = 'EDU RUN ARENA 3D',
   cameraPreset = 'chase',
@@ -108,8 +142,13 @@ export const StadiumArena3D = memo(function StadiumArena3D({
 
   const playersRef = useRef<PlayerState[]>(players);
   const externalLivePlayersRef = useRef<MutableRefObject<PlayerState[]> | undefined>(livePlayersRef);
+  const externalLiveRoomRef = useRef<MutableRefObject<LiveFirebaseRoom | null> | undefined>(liveRoomRef);
+  const externalRawPartsRef = useRef<MutableRefObject<LiveFirebaseParticipant[]> | undefined>(
+    rawParticipantsRef
+  );
   const externalLiveVersionRef = useRef<MutableRefObject<number> | undefined>(liveVersionRef);
   const localIdRef = useRef<string | undefined>(localPlayerId);
+  const followedIdRef = useRef<string | null>(followedPlayerId);
   const statusRef = useRef<RoomStatus>(roomStatus);
   const presetRef = useRef<CameraPresetId>(cameraPreset);
   const viewModeRef = useRef<CameraViewMode>(cameraViewMode);
@@ -121,16 +160,19 @@ export const StadiumArena3D = memo(function StadiumArena3D({
   const prevStaticSigRef = useRef('');
   playersRef.current = players;
   externalLivePlayersRef.current = livePlayersRef;
+  externalLiveRoomRef.current = liveRoomRef;
+  externalRawPartsRef.current = rawParticipantsRef;
   externalLiveVersionRef.current = liveVersionRef;
   localIdRef.current = localPlayerId;
+  followedIdRef.current = followedPlayerId ?? null;
   statusRef.current = roomStatus;
   presetRef.current = cameraPreset;
   viewModeRef.current = cameraViewMode;
   roomNameRef.current = roomName;
   maxPlayersRef.current = maxPlayers;
   venueRef.current = venue;
-  const staticSig = `${roomStatus}:${maxPlayers}:${localPlayerId || ''}:${roomName}:${livePlayersRef ? 'ext' : players.length}`;
-  if (!livePlayersRef || prevStaticSigRef.current !== staticSig) {
+  const staticSig = `${roomStatus}:${maxPlayers}:${localPlayerId || ''}:${roomName}:${livePlayersRef || rawParticipantsRef ? 'ext' : players.length}`;
+  if ((!livePlayersRef && !rawParticipantsRef) || prevStaticSigRef.current !== staticSig) {
     prevStaticSigRef.current = staticSig;
     dataVersionRef.current += 1;
   }
@@ -185,21 +227,21 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     const initH = container.clientHeight || window.innerHeight;
 
     const camera = new THREE.PerspectiveCamera(56, initW / initH, 0.2, 2400);
-    const camLookCurrent = new THREE.Vector3(14, 2, 142);
-    camera.position.set(-30, 16, 175);
+    const camLookCurrent = new THREE.Vector3(-2, 3.0, 147);
+    camera.position.set(-34, 14.5, 118);
     camera.lookAt(camLookCurrent);
 
     // 4 persistent sub-cameras + lightweight offscreen render targets for smooth 4-angle live preview
     const previewCameras = CAMERA_PRESET_LIST.map(() => {
       const subCam = new THREE.PerspectiveCamera(54, 16 / 10, 0.2, 2400);
-      subCam.position.set(-30, 16, 175);
+      subCam.position.set(-34, 14.5, 118);
       return subCam;
     });
-    const previewLookCurrents = CAMERA_PRESET_LIST.map(() => new THREE.Vector3(14, 2, 142));
+    const previewLookCurrents = CAMERA_PRESET_LIST.map(() => new THREE.Vector3(-2, 3.0, 147));
     const previewInitialized = CAMERA_PRESET_LIST.map(() => false);
 
-    const PIP_RT_W = 240;
-    const PIP_RT_H = 150;
+    const PIP_RT_W = 192;
+    const PIP_RT_H = 120;
     const previewRenderTargets = CAMERA_PRESET_LIST.map(
       () =>
         new THREE.WebGLRenderTarget(PIP_RT_W, PIP_RT_H, {
@@ -211,8 +253,9 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     );
     const previewDirty = CAMERA_PRESET_LIST.map(() => true);
     let pipRoundRobinIdx = 0;
-    let quadPairParity = 0;
+    let quadRoundRobinIdx = 0;
     let lastViewMode: CameraViewMode = viewModeRef.current;
+    let lastFollowedId: string | null = followedIdRef.current;
 
     const blitScene = new THREE.Scene();
     const blitCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -236,8 +279,14 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     };
 
     const { renderer, isSoftwareGl } = createConfiguredRenderer(container);
-    if (!isSoftwareGl && renderer.getPixelRatio() > 1.5) {
-      renderer.setPixelRatio(1.5);
+    if (!isSoftwareGl && renderer.getPixelRatio() > 1.25) {
+      renderer.setPixelRatio(1.25);
+    }
+    // Keep shadowMap.enabled constant (never toggle mid-frame -> avoids GPU shader pipeline thrashing)
+    // Bake static stadium shadows once and refresh only on theme/ceremony change
+    if (renderer.shadowMap.enabled) {
+      renderer.shadowMap.autoUpdate = false;
+      renderer.shadowMap.needsUpdate = true;
     }
     const disposeEnv = applyStudioEnvironment(scene, renderer);
 
@@ -254,12 +303,13 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       stadium.setPerimeterLedConfig(ledCfg);
     });
 
-    // Runner instances map keyed by participant ID with continuous dead-reckoning state
+    // Runner instances map keyed by participant ID with continuous smooth dead-reckoning & entrance walk-in state
     const runnerMap = new Map<
       string,
       {
         rig: BlockyRunnerRig;
-        targetProgress: number;
+        authProgress: number;
+        lastAuthTime: number;
         renderProgress: number;
         velocityPerSec: number;
         pose: TrackPose;
@@ -268,8 +318,19 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         wornMedal: MedalAttachmentHandle | null;
         wornMedalRank: number | null;
         celebrateStartAt: number | null;
+        walkInActive: boolean;
+        walkInElapsed: number;
+        walkInDuration: number;
+        walkInTurnDur: number;
+        walkInStartX: number;
+        walkInStartZ: number;
+        walkInExitZ: number;
+        walkInCurrentX: number;
+        walkInCurrentZ: number;
+        walkInCurrentYaw: number;
       }
     >();
+    let hasCompletedInitialSync = false;
 
     // Formal VIP Medal Presenter for the center-field stadium championship podium ceremony
     const presenterRig = createFormalPresenterRig(!showcaseMode && !isSoftwareGl);
@@ -328,7 +389,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     let slowFrameAccum = 0;
     let slowFrameSamples = 0;
     let currentDpr = renderer.getPixelRatio();
-    let shadowsAutoDisabled = false;
+    let smoothNowMs = getSyncedNowMs();
+    let lastCeremonyActive = false;
 
     let viewportW = initW;
     let viewportH = initH;
@@ -346,13 +408,17 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     const resizeObs = new ResizeObserver(handleResize);
     resizeObs.observe(rootEl);
 
-    const getActivePlayers = () =>
-      externalLivePlayersRef.current ? externalLivePlayersRef.current.current : playersRef.current;
+    const getActivePlayers = (): PlayerState[] => {
+      if (externalRawPartsRef.current) return externalRawPartsRef.current.current;
+      if (externalLivePlayersRef.current) return externalLivePlayersRef.current.current;
+      return playersRef.current;
+    };
 
     const syncRunnersAndTelemetry = () => {
       const list = getActivePlayers();
       const status = statusRef.current;
       const laneCap = Math.min(30, Math.max(1, maxPlayersRef.current || 30));
+      const nowMs = getSyncedNowMs();
 
       if (runnerMap.size > list.length) {
         const activeIds = new Set(list.map((p) => p.id));
@@ -373,23 +439,72 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         const speedPerSec = status === 'playing' && p.finishedAt == null && p.speed > 0 ? p.speed / trackLength : 0;
 
         if (!existing || existing.signature !== sig) {
+          const prevWalkState = existing
+            ? {
+                walkInActive: existing.walkInActive,
+                walkInElapsed: existing.walkInElapsed,
+                walkInDuration: existing.walkInDuration,
+                walkInTurnDur: existing.walkInTurnDur,
+                walkInStartX: existing.walkInStartX,
+                walkInStartZ: existing.walkInStartZ,
+                walkInExitZ: existing.walkInExitZ,
+                walkInCurrentX: existing.walkInCurrentX,
+                walkInCurrentZ: existing.walkInCurrentZ,
+                walkInCurrentYaw: existing.walkInCurrentYaw,
+              }
+            : null;
           if (existing) {
             existing.wornMedal?.dispose();
             scene.remove(existing.rig.root);
             existing.rig.dispose();
           }
           const isLocal = p.id === localIdRef.current;
-          // Keep contactShadow discs on all 30 runners; only cast dynamic shadow maps on local player or small rooms (<=6) to eliminate 700+ shadow draw calls
-          const allowShadow =
-            !showcaseMode && !isSoftwareGl && !shadowsAutoDisabled && (isLocal || list.length <= 6);
-          const rig = createBlockyRunner(p.avatar, p.name, p.lane + 1, isLocal, !showcaseMode, allowShadow);
+          // Contact shadow discs ground all 30 runners cleanly at 60 FPS with zero dynamic shadow-pass cost
+          const rig = createBlockyRunner(p.avatar, p.name, p.lane + 1, isLocal, !showcaseMode, false);
           const pose = stadium.getTrackPose(p.progress, p.lane, laneCap);
-          rig.root.position.set(pose.x, 0, pose.z);
-          rig.root.rotation.y = pose.yaw;
+          const entrance = stadium.getEntrancePose(p.lane, laneCap);
+          const walkDist =
+            Math.abs(entrance.startZ - entrance.exitZ) +
+            Math.hypot(pose.x - entrance.startX, pose.z - entrance.exitZ);
+          const walkDuration = THREE.MathUtils.clamp(walkDist / 7.5, 3.2, 6.8);
+          const walkTurnDur = 0.45;
+
+          let walkInActive = false;
+          let walkInElapsed = 0;
+
+          if (prevWalkState) {
+            walkInActive = prevWalkState.walkInActive;
+            walkInElapsed = prevWalkState.walkInElapsed;
+          } else if (!showcaseMode && status === 'waiting' && p.progress <= 0.001) {
+            const joinedAgeSec =
+              p.joinedAtMs && p.joinedAtMs > 0 ? (nowMs - p.joinedAtMs) / 1000 : null;
+            if (hasCompletedInitialSync) {
+              // Brand-new participant joined live while teacher or peers are watching
+              walkInActive = true;
+              walkInElapsed = 0;
+            } else if (isLocal) {
+              // Local student just entered the lobby -> always experience walking out from stadium entrance
+              if (joinedAgeSec === null || joinedAgeSec < 22) {
+                walkInActive = true;
+                walkInElapsed = 0;
+              }
+            } else if (joinedAgeSec !== null && joinedAgeSec >= -3 && joinedAgeSec < walkDuration + walkTurnDur) {
+              // Peer joined just seconds ago before this viewer mounted -> resume mid-walk smoothly
+              walkInActive = true;
+              walkInElapsed = Math.max(0, joinedAgeSec);
+            }
+          }
+
+          const initX = walkInActive ? entrance.startX : pose.x;
+          const initZ = walkInActive ? entrance.startZ : pose.z;
+          const initYaw = walkInActive ? Math.PI : pose.yaw;
+          rig.root.position.set(initX, 0, initZ);
+          rig.root.rotation.y = initYaw;
           scene.add(rig.root);
           runnerMap.set(p.id, {
             rig,
-            targetProgress: p.progress,
+            authProgress: p.progress,
+            lastAuthTime: clock.elapsedTime,
             renderProgress: p.progress,
             velocityPerSec: speedPerSec,
             pose,
@@ -398,16 +513,26 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             wornMedal: null,
             wornMedalRank: null,
             celebrateStartAt: null,
+            walkInActive,
+            walkInElapsed,
+            walkInDuration: walkDuration,
+            walkInTurnDur: walkTurnDur,
+            walkInStartX: entrance.startX,
+            walkInStartZ: entrance.startZ,
+            walkInExitZ: entrance.exitZ,
+            walkInCurrentX: prevWalkState ? prevWalkState.walkInCurrentX : initX,
+            walkInCurrentZ: prevWalkState ? prevWalkState.walkInCurrentZ : initZ,
+            walkInCurrentYaw: prevWalkState ? prevWalkState.walkInCurrentYaw : initYaw,
           });
         } else {
-          // Sync authoritative server target + current velocity for smooth between-tick dead-reckoning
-          if (Math.abs(p.progress - existing.targetProgress) > 0.04) {
-            existing.targetProgress = p.progress;
-          } else {
-            existing.targetProgress = Math.max(existing.targetProgress * 0.35 + p.progress * 0.65, p.progress);
-          }
+          existing.authProgress = p.progress;
+          existing.lastAuthTime = clock.elapsedTime;
           existing.velocityPerSec = speedPerSec;
         }
+      }
+
+      if (list.length > 0 || clock.elapsedTime >= 1.2) {
+        hasCompletedInitialSync = true;
       }
     };
 
@@ -425,21 +550,24 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       const dt = Math.min(rawDt, 0.04);
       const elapsed = clock.elapsedTime;
 
-      // Adaptive performance guard: if sustained frame time > 25ms on hardware WebGL, reduce resolution cleanly
+      // Smooth monotonic server-synced race clock (prevents OS timer jitter or sudden jumps)
+      const targetNowMs = getSyncedNowMs();
+      const clockDeltaMs = targetNowMs - smoothNowMs;
+      if (Math.abs(clockDeltaMs) > 450) {
+        smoothNowMs = targetNowMs;
+      } else {
+        smoothNowMs += rawDt * 1000 + clockDeltaMs * Math.min(1, dt * 4);
+      }
+
+      // Adaptive performance guard: if sustained frame time > 22ms on hardware WebGL, reduce resolution smoothly
       if (!isSoftwareGl && rawDt > 0 && rawDt < 0.25) {
         slowFrameAccum += rawDt;
         slowFrameSamples += 1;
         if (slowFrameSamples >= 18) {
           const avgDt = slowFrameAccum / slowFrameSamples;
-          if (avgDt > 0.025) {
-            if (currentDpr > 0.9) {
-              currentDpr = Math.max(0.85, Number((currentDpr - 0.25).toFixed(2)));
-              renderer.setPixelRatio(currentDpr);
-            } else if (!shadowsAutoDisabled && renderer.shadowMap.enabled) {
-              shadowsAutoDisabled = true;
-              renderer.shadowMap.enabled = false;
-              renderer.shadowMap.autoUpdate = false;
-            }
+          if (avgDt > 0.022 && currentDpr > 0.85) {
+            currentDpr = Math.max(0.85, Number((currentDpr - 0.15).toFixed(2)));
+            renderer.setPixelRatio(currentDpr);
           }
           slowFrameAccum = 0;
           slowFrameSamples = 0;
@@ -457,6 +585,9 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         dampThemeWeights(themeWeights, targetVenue, dt, 4.2);
         lightingRig.applyWeights(scene, renderer, themeWeights);
         stadium.applyThemeWeights(themeWeights);
+        if (renderer.shadowMap.enabled && frameCounter % 6 === 0) {
+          renderer.shadowMap.needsUpdate = true;
+        }
       }
 
       const extVer = externalLiveVersionRef.current ? externalLiveVersionRef.current.current : 0;
@@ -555,15 +686,30 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         }
       }
 
+      const liveRoom = externalLiveRoomRef.current ? externalLiveRoomRef.current.current : null;
+      const rawParts = externalRawPartsRef.current ? externalRawPartsRef.current.current : null;
+      const useDirectPhysics = Boolean(!showcaseMode && liveRoom && rawParts);
+
+      if (inCeremony !== lastCeremonyActive) {
+        lastCeremonyActive = inCeremony;
+        if (renderer.shadowMap.enabled) {
+          renderer.shadowMap.needsUpdate = true;
+        }
+      }
+
       let anyBoostOrFinish = false;
-      let localTarget: { pose: TrackPose; effect: string; finished: boolean } | null = null;
+      let localTarget: { pose: TrackPose; effect: string; finished: boolean; walkingIn: boolean } | null = null;
+      let followedTarget: { pose: TrackPose; effect: string; finished: boolean; walkingIn: boolean } | null = null;
       let leaderPlayer: PlayerState | null = null;
       let leaderPose: TrackPose | null = null;
+      const activeFollowedId = followedIdRef.current;
 
       for (let i = 0; i < list.length; i++) {
         const p = list[i];
         const entry = runnerMap.get(p.id);
         if (!entry) continue;
+
+        let liveEffect = p.effectState;
 
         if (showcaseMode) {
           const speedRate =
@@ -573,15 +719,32 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               ? 0.001
               : 0.0032 + (p.lane % 4) * 0.0003;
           entry.renderProgress = (elapsed * speedRate + p.lane * 0.014) % 1;
-        } else {
-          // Continuous dead-reckoning advance between server ticks eliminates 15/20Hz micro-stutter
-          if (entry.velocityPerSec > 0) {
-            const maxLead = Math.min(1, p.progress + entry.velocityPerSec * 0.18);
-            entry.targetProgress = Math.min(maxLead, entry.targetProgress + entry.velocityPerSec * dt);
-          } else {
-            entry.targetProgress = p.progress;
+        } else if (useDirectPhysics && liveRoom && rawParts && rawParts[i]) {
+          // True 60 FPS zero-allocation physics directly from Firestore authoritative anchors (zero 10Hz timer judder!)
+          const phys = evaluateParticipantPhysics(rawParts[i], liveRoom, smoothNowMs, _physOut);
+          liveEffect = phys.effectState;
+          const targetProg = phys.progress;
+          const diff = targetProg - entry.renderProgress;
+          if (status === 'waiting' || status === 'countdown' || Math.abs(diff) > 0.08) {
+            entry.renderProgress = targetProg;
+          } else if (Math.abs(diff) > 0.000001) {
+            // Smoothly absorb discrete +5m boost jumps while tracking continuous velocity with zero lag
+            entry.renderProgress = THREE.MathUtils.damp(entry.renderProgress, targetProg, 16, dt);
           }
-          entry.renderProgress = THREE.MathUtils.damp(entry.renderProgress, entry.targetProgress, 14, dt);
+        } else {
+          const sinceAuth = Math.max(0, Math.min(0.3, elapsed - entry.lastAuthTime));
+          const extrapolated = Math.min(1, entry.authProgress + entry.velocityPerSec * sinceAuth);
+          const diff = extrapolated - entry.renderProgress;
+          if (Math.abs(diff) > 0.06 || status === 'waiting' || status === 'countdown') {
+            entry.renderProgress = extrapolated;
+          } else if (entry.velocityPerSec > 0) {
+            entry.renderProgress = Math.min(
+              1,
+              Math.max(0, entry.renderProgress + entry.velocityPerSec * dt + diff * Math.min(1, dt * 8))
+            );
+          } else {
+            entry.renderProgress = THREE.MathUtils.damp(entry.renderProgress, extrapolated, 10, dt);
+          }
         }
 
         const pose = stadium.getTrackPose(entry.renderProgress, p.lane, laneCap, entry.pose);
@@ -719,7 +882,141 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             animPhase = flankIdx * 0.55;
           }
           anyBoostOrFinish = true;
+        } else if (!showcaseMode && entry.walkInActive && (status === 'waiting' || status === 'countdown')) {
+          if (status === 'countdown') {
+            // Smoothly hurry into assigned starting lane so runner is locked on the start line before GO!
+            const nextX = THREE.MathUtils.damp(entry.walkInCurrentX, pose.x, 6.5, dt);
+            const nextZ = THREE.MathUtils.damp(entry.walkInCurrentZ, pose.z, 6.5, dt);
+            const dx = pose.x - entry.walkInCurrentX;
+            const dz = pose.z - entry.walkInCurrentZ;
+            const distLeft = Math.hypot(dx, dz);
+            let nextYaw = pose.yaw;
+            if (distLeft > 0.25) {
+              const targetYaw = Math.atan2(dx, dz);
+              const angDiff = Math.atan2(
+                Math.sin(targetYaw - entry.walkInCurrentYaw),
+                Math.cos(targetYaw - entry.walkInCurrentYaw)
+              );
+              nextYaw = entry.walkInCurrentYaw + angDiff * Math.min(1, dt * 10);
+              animMode = 'normal';
+            } else {
+              const angDiff = Math.atan2(
+                Math.sin(pose.yaw - entry.walkInCurrentYaw),
+                Math.cos(pose.yaw - entry.walkInCurrentYaw)
+              );
+              nextYaw = entry.walkInCurrentYaw + angDiff * Math.min(1, dt * 12);
+              animMode = 'idle';
+              if (distLeft < 0.08 && Math.abs(angDiff) < 0.05) {
+                entry.walkInActive = false;
+              }
+            }
+            entry.walkInCurrentX = nextX;
+            entry.walkInCurrentZ = nextZ;
+            entry.walkInCurrentYaw = nextYaw;
+            pose.x = nextX;
+            pose.z = nextZ;
+            pose.yaw = nextYaw;
+            pose.fx = Math.sin(nextYaw);
+            pose.fz = Math.cos(nextYaw);
+            entry.rig.root.position.set(nextX, 0, nextZ);
+            entry.rig.root.rotation.y = nextYaw;
+          } else {
+            // Walk smoothly from Stadium Athlete Entrance Tunnel ("PINTU MASUK ATLET") to assigned start lane
+            entry.walkInElapsed += dt;
+            const walkDur = entry.walkInDuration;
+            const turnDur = entry.walkInTurnDur;
+            const totalDur = walkDur + turnDur;
+            const startX = entry.walkInStartX;
+            const startZ = entry.walkInStartZ;
+            const exitZ = entry.walkInExitZ;
+            const targetX = pose.x;
+            const targetZ = pose.z;
+            const targetYaw = pose.yaw;
+
+            const exitDist = Math.abs(startZ - exitZ);
+            const curveDist = Math.hypot(targetX - startX, targetZ - exitZ);
+            const exitFrac = THREE.MathUtils.clamp(
+              exitDist / Math.max(0.5, exitDist + curveDist),
+              0.14,
+              0.38
+            );
+            const exitDur = walkDur * exitFrac;
+            const ctrlX = startX + 2.2;
+            const ctrlZ = targetZ + (exitZ - targetZ) * 0.14;
+
+            let rx = targetX;
+            let rz = targetZ;
+            let rYaw = targetYaw;
+
+            if (entry.walkInElapsed < exitDur) {
+              const u = THREE.MathUtils.clamp(entry.walkInElapsed / Math.max(0.05, exitDur), 0, 1);
+              rx = startX;
+              rz = THREE.MathUtils.lerp(startZ, exitZ, u);
+              rYaw = Math.PI;
+              animMode = 'walk';
+            } else if (entry.walkInElapsed < walkDur) {
+              const rawU = THREE.MathUtils.clamp(
+                (entry.walkInElapsed - exitDur) / Math.max(0.1, walkDur - exitDur),
+                0,
+                1
+              );
+              // Gentle ease-out in the final 20% so the runner decelerates smoothly onto the starting line
+              const u = rawU < 0.8 ? rawU / 0.8 * 0.86 : 0.86 + THREE.MathUtils.smoothstep((rawU - 0.8) / 0.2, 0, 1) * 0.14;
+              const inv = 1 - u;
+              rx = inv * inv * startX + 2 * inv * u * ctrlX + u * u * targetX;
+              rz = inv * inv * exitZ + 2 * inv * u * ctrlZ + u * u * targetZ;
+              const dxdt = 2 * inv * (ctrlX - startX) + 2 * u * (targetX - ctrlX);
+              const dzdt = 2 * inv * (ctrlZ - exitZ) + 2 * u * (targetZ - ctrlZ);
+              const desiredYaw = Math.hypot(dxdt, dzdt) > 1e-4 ? Math.atan2(dxdt, dzdt) : targetYaw;
+              const angDiff = Math.atan2(
+                Math.sin(desiredYaw - entry.walkInCurrentYaw),
+                Math.cos(desiredYaw - entry.walkInCurrentYaw)
+              );
+              rYaw = entry.walkInCurrentYaw + angDiff * Math.min(1, dt * 8.5);
+              animMode = 'walk';
+            } else if (entry.walkInElapsed < totalDur) {
+              const u = THREE.MathUtils.smoothstep(
+                (entry.walkInElapsed - walkDur) / Math.max(0.05, turnDur),
+                0,
+                1
+              );
+              rx = targetX;
+              rz = targetZ;
+              const arrivalDx = targetX - ctrlX;
+              const arrivalDz = targetZ - ctrlZ;
+              const arrivalYaw =
+                Math.hypot(arrivalDx, arrivalDz) > 1e-4
+                  ? Math.atan2(arrivalDx, arrivalDz)
+                  : targetYaw;
+              const angDiff = Math.atan2(
+                Math.sin(targetYaw - arrivalYaw),
+                Math.cos(targetYaw - arrivalYaw)
+              );
+              rYaw = arrivalYaw + angDiff * u;
+              animMode = 'idle';
+            } else {
+              rx = targetX;
+              rz = targetZ;
+              rYaw = targetYaw;
+              entry.walkInActive = false;
+              animMode = 'idle';
+            }
+
+            entry.walkInCurrentX = rx;
+            entry.walkInCurrentZ = rz;
+            entry.walkInCurrentYaw = rYaw;
+            pose.x = rx;
+            pose.z = rz;
+            pose.yaw = rYaw;
+            pose.fx = Math.sin(rYaw);
+            pose.fz = Math.cos(rYaw);
+            entry.rig.root.position.set(rx, 0, rz);
+            entry.rig.root.rotation.y = rYaw;
+          }
         } else {
+          if (entry.walkInActive) {
+            entry.walkInActive = false;
+          }
           entry.rig.root.position.set(pose.x, 0, pose.z);
           entry.rig.root.rotation.y = pose.yaw;
 
@@ -733,8 +1030,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             }
             anyBoostOrFinish = true;
           } else if (status === 'playing') {
-            animMode = p.effectState;
-            if (p.effectState === 'boost') {
+            animMode = liveEffect;
+            if (liveEffect === 'boost') {
               anyBoostOrFinish = true;
               hasActiveTrails = true;
               const td = trailData[trailCursor];
@@ -761,8 +1058,17 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         if (p.id === localIdRef.current) {
           localTarget = {
             pose,
-            effect: p.effectState,
+            effect: liveEffect,
             finished: Boolean(p.finishedAt),
+            walkingIn: entry.walkInActive,
+          };
+        }
+        if (activeFollowedId && p.id === activeFollowedId) {
+          followedTarget = {
+            pose,
+            effect: liveEffect,
+            finished: Boolean(p.finishedAt),
+            walkingIn: entry.walkInActive,
           };
         }
       }
@@ -802,8 +1108,8 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       stadium.updateConfetti(dt);
       stadium.updatePerimeterLed(dt);
 
-      // Update Upper-Side Stadium Digital Jumbotron with Live Runner Ranking Board (throttled ~2.5Hz for zero GPU stutter)
-      if (lastJumbotronUpdateAt < 0 || elapsed - lastJumbotronUpdateAt >= 0.38) {
+      // Update Upper-Side Stadium Digital Jumbotron with Live Runner Ranking Board (throttled ~1.2Hz to prevent GPU texture upload stalls)
+      if (lastJumbotronUpdateAt < 0 || elapsed - lastJumbotronUpdateAt >= 0.85) {
         const sortedForBoard = [...list].sort((a, b) => {
           if (status === 'finished') {
             const ra = a.scoreRank ?? Number.MAX_SAFE_INTEGER;
@@ -884,7 +1190,10 @@ export const StadiumArena3D = memo(function StadiumArena3D({
 
       // Unified 4-position camera solver (zero per-frame allocations)
       const startPose = finishPose;
-      const focusRunner = localTarget
+      const hasExplicitFollow = Boolean(followedTarget);
+      const focusRunner = followedTarget
+        ? followedTarget
+        : localTarget
         ? localTarget
         : leaderPose
         ? { pose: leaderPose, effect: leaderPlayer?.effectState || 'normal', finished: false }
@@ -898,15 +1207,28 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       ): { fov: number; damp: number } => {
         // Status-driven dramatic framing for the main camera during waiting/countdown/ceremony
         if (allowStatusOverride && !showcaseMode) {
-          if (status === 'waiting') {
-            outPos.set(startPose.x - 30 + Math.sin(elapsed * 0.25) * 6, 12.5, startPose.z + 17);
-            outLook.set(startPose.x + 14, 3.0, startPose.z - 2);
-            return { fov: 56, damp: 4.0 };
+          if (status === 'waiting' && !followedTarget) {
+            if (localTarget?.walkingIn) {
+              // Follow local student cinematically from the track side as they emerge from PINTU MASUK ATLET
+              const lp = localTarget.pose;
+              outPos.set(lp.x - 10.5, 5.2, Math.min(160.5, lp.z - 12.2));
+              outLook.set(lp.x + lp.fx * 2.2, 1.45, lp.z + lp.fz * 2.2);
+              return { fov: 54, damp: 5.2 };
+            }
+            // Wide broadcast shot framing BOTH PINTU MASUK ATLET (x=-12, z=168) AND the full 30-lane Start Line (x=0)
+            outPos.set(startPose.x - 34 + Math.sin(elapsed * 0.22) * 4.5, 14.5, startPose.z - 23.75);
+            outLook.set(startPose.x - 2, 3.0, startPose.z + 5.25);
+            return { fov: 56, damp: 3.6 };
           }
           if (status === 'countdown') {
-            const focus = localTarget ? localTarget.pose : startPose;
+            const focus = followedTarget
+              ? followedTarget.pose
+              : localTarget
+              ? localTarget.pose
+              : startPose;
+            const lookY = followedTarget || !localTarget ? 1.2 : -0.7;
             outPos.set(focus.x - focus.fx * 7.4, 3.6, focus.z - focus.fz * 7.4 + 1.8);
-            outLook.set(focus.x + focus.fx * 5.0, -0.7, focus.z + focus.fz * 5.0);
+            outLook.set(focus.x + focus.fx * 5.0, lookY, focus.z + focus.fz * 5.0);
             return { fov: 56, damp: 6.5 };
           }
           if (inCeremony) {
@@ -940,13 +1262,19 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           }
         }
 
-        // 1) CAM 1 — Udara Stadion (Aerial Wide Broadcast)
+        // 1) CAM 1 — Udara Stadion (Aerial Wide Broadcast / Elevated Follow Cam)
         if (preset === 'broadcast') {
-          if (showcaseMode) {
+          if (showcaseMode && !followedTarget) {
             const camOrbitAngle = elapsed * 0.12 - 0.52;
             outPos.set(Math.sin(camOrbitAngle) * 515, 112, Math.cos(camOrbitAngle) * 335);
             outLook.set(0, 16, 0);
             return { fov: 54, damp: 3.2 };
+          }
+          if (followedTarget) {
+            const focus = followedTarget.pose;
+            outPos.set(focus.x * 0.72, 42, focus.z * 0.72);
+            outLook.set(focus.x, 1.8, focus.z);
+            return { fov: 50, damp: 5.5 };
           }
           const focus = leaderPose || startPose;
           outPos.set(focus.x * 0.62, 78, focus.z * 0.62);
@@ -959,20 +1287,25 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           const p = focusRunner.pose;
           const inX = p.fz;
           const inZ = -p.fx;
-          outPos.set(p.x + inX * 23 + p.fx * 15, 6.0, p.z + inZ * 23 + p.fz * 15);
+          const sideZ = p.z + inZ * 23 + p.fz * 15;
+          outPos.set(
+            p.x + inX * 23 + p.fx * 15,
+            6.0,
+            status === 'waiting' ? Math.min(161.5, sideZ) : sideZ
+          );
           outLook.set(p.x + p.fx * 2.5, 1.55, p.z + p.fz * 2.5);
           return { fov: 46, damp: 6.2 };
         }
 
         // 3) CAM 4 — Garis Finish (Start/Finish Gantry / Podium Angle)
-        if (preset === 'finish' || (allowStatusOverride && localTarget?.finished)) {
+        if (preset === 'finish' || (allowStatusOverride && !hasExplicitFollow && localTarget?.finished)) {
           if (inCeremony) {
             const sway = Math.sin(ceremonyElapsed * 0.4) * 3.2;
             outPos.set(0.3 + sway, 4.9, 15.2);
             outLook.set(0.3, 2.2, -0.4);
             return { fov: 52, damp: 4.2 };
           }
-          if (localTarget?.finished) {
+          if (!hasExplicitFollow && localTarget?.finished) {
             const focus = localTarget.pose;
             outPos.set(
               focus.x + focus.fx * 9 + Math.sin(elapsed * 0.6) * 4,
@@ -995,8 +1328,19 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         const p = focusRunner.pose;
         const targetFov =
           focusRunner.effect === 'boost' ? 64 : focusRunner.effect === 'penalty' ? 50 : 56;
-        const lookY = showcaseMode || !localTarget ? 1.15 : -1.65;
-        outPos.set(p.x - p.fx * 9.4, 4.35, p.z - p.fz * 9.4);
+        // Guard camera from going behind the outer grandstand wall while runner exits the athlete tunnel
+        if (status === 'waiting' && p.z > 156 && p.fz < -0.25) {
+          outPos.set(p.x - 10.2, 4.9, Math.min(160.5, p.z - 10.5));
+          outLook.set(p.x + p.fx * 1.5, 1.45, p.z + p.fz * 1.5);
+          return { fov: 54, damp: 6.5 };
+        }
+        const lookY = showcaseMode || !localTarget || hasExplicitFollow ? 1.15 : -1.65;
+        const chaseZ = p.z - p.fz * 9.4;
+        outPos.set(
+          p.x - p.fx * 9.4,
+          4.35,
+          status === 'waiting' ? Math.min(163.5, chaseZ) : chaseZ
+        );
         outLook.set(p.x + p.fx * 4.2, lookY, p.z + p.fz * 4.2);
         return { fov: targetFov, damp: 9.0 };
       };
@@ -1006,8 +1350,9 @@ export const StadiumArena3D = memo(function StadiumArena3D({
       const h = viewportH || container.clientHeight || window.innerHeight;
       frameCounter += 1;
 
-      if (viewMode !== lastViewMode) {
+      if (viewMode !== lastViewMode || activeFollowedId !== lastFollowedId) {
         lastViewMode = viewMode;
+        lastFollowedId = activeFollowedId;
         for (let i = 0; i < previewDirty.length; i++) {
           previewDirty[i] = true;
         }
@@ -1055,58 +1400,51 @@ export const StadiumArena3D = memo(function StadiumArena3D({
           [halfW, 0, rightW, halfH],
         ];
 
-        // Update 2 quadrants per frame into cached render targets (cuts GPU scene passes by 50%)
-        const qTargetW = Math.min(480, Math.max(200, Math.floor(halfW * 0.85)));
-        const qTargetH = Math.min(300, Math.max(130, Math.floor(halfH * 0.85)));
-        const prevShadowAuto = renderer.shadowMap.autoUpdate;
-        const prevShadowEnabled = renderer.shadowMap.enabled;
-        quadPairParity = (quadPairParity + 1) % 2;
-        const indicesToUpdate: number[] = [];
+        // Update 1 quadrant per frame round-robin (or 2 on first dirty init) — cuts GPU cost by 75% vs 4-pass
+        const qTargetW = Math.min(384, Math.max(180, Math.floor(halfW * 0.72)));
+        const qTargetH = Math.min(240, Math.max(120, Math.floor(halfH * 0.72)));
+        let updateIdx = -1;
         for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
-          if (previewDirty[i] && indicesToUpdate.length < 2) {
-            indicesToUpdate.push(i);
+          if (previewDirty[i]) {
+            updateIdx = i;
+            break;
           }
         }
-        if (indicesToUpdate.length === 0) {
-          indicesToUpdate.push(quadPairParity * 2, quadPairParity * 2 + 1);
+        if (updateIdx === -1) {
+          updateIdx = quadRoundRobinIdx;
+          quadRoundRobinIdx = (quadRoundRobinIdx + 1) % CAMERA_PRESET_LIST.length;
         }
 
-        renderer.setScissorTest(false);
-        for (let k = 0; k < indicesToUpdate.length; k++) {
-          const i = indicesToUpdate[k];
-          const [, , vw, vh] = quadCells[i];
-          if (vw < 4 || vh < 4) continue;
-          const rt = previewRenderTargets[i];
+        const [, , vw, vh] = quadCells[updateIdx];
+        if (vw >= 4 && vh >= 4) {
+          const rt = previewRenderTargets[updateIdx];
           ensureRenderTargetSize(rt, qTargetW, qTargetH);
-          updateSubCamera(i, CAMERA_PRESET_LIST[i].id, vw / vh);
-          renderer.shadowMap.enabled = prevShadowEnabled && !isSoftwareGl && currentDpr >= 1;
-          renderer.shadowMap.autoUpdate = k === 0 ? prevShadowAuto : false;
+          updateSubCamera(updateIdx, CAMERA_PRESET_LIST[updateIdx].id, vw / vh);
+          renderer.setScissorTest(false);
           renderer.setRenderTarget(rt);
           renderer.setViewport(0, 0, rt.width, rt.height);
-          renderer.render(scene, previewCameras[i]);
-          previewDirty[i] = false;
+          renderer.render(scene, previewCameras[updateIdx]);
+          renderer.setRenderTarget(null);
+          previewDirty[updateIdx] = false;
         }
-        renderer.setRenderTarget(null);
-        renderer.shadowMap.enabled = prevShadowEnabled;
-        renderer.shadowMap.autoUpdate = prevShadowAuto;
 
-        // Blit all 4 cached quadrant textures in 4 lightweight fullscreen-quad draws
+        // Blit all 4 cached quadrant textures in 4 ultra-lightweight fullscreen-quad draws
         const prevAutoClear = renderer.autoClear;
         renderer.autoClear = false;
         renderer.setScissorTest(true);
         for (let i = 0; i < CAMERA_PRESET_LIST.length; i++) {
-          const [vx, vy, vw, vh] = quadCells[i];
-          if (vw < 4 || vh < 4) continue;
+          const [vx, vy, cw, ch] = quadCells[i];
+          if (cw < 4 || ch < 4) continue;
           blitMat.map = previewRenderTargets[i].texture;
-          renderer.setViewport(vx, vy, vw, vh);
-          renderer.setScissor(vx, vy, vw, vh);
+          renderer.setViewport(vx, vy, cw, ch);
+          renderer.setScissor(vx, vy, cw, ch);
           renderer.render(blitScene, blitCamera);
         }
         renderer.setScissorTest(false);
         renderer.setViewport(0, 0, w, h);
         renderer.autoClear = prevAutoClear;
       } else {
-        // Main camera pass (single or pip base) — always full smoothness
+        // Main camera pass (single or pip base) — always full 60 FPS smoothness
         const mainCfg = computePresetCamera(presetRef.current, true, _camDesired, _camTarget);
         if (Math.abs(camera.fov - mainCfg.fov) > 0.08) {
           camera.fov = THREE.MathUtils.damp(camera.fov, mainCfg.fov, 6, dt);
@@ -1122,7 +1460,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         renderer.setViewport(0, 0, w, h);
         renderer.render(scene, camera);
 
-        // Cached round-robin 4-angle PiP preview (at most 1 lightweight offscreen thumbnail update every 2 frames)
+        // Cached round-robin 4-angle PiP preview (at most 1 tiny 192x120 thumbnail every 4 frames, zero shadowMap toggling!)
         if (viewMode === 'pip') {
           const rects = pipRectsRef.current;
 
@@ -1134,7 +1472,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               break;
             }
           }
-          const cadence = isSoftwareGl || currentDpr < 1 ? 3 : 2;
+          const cadence = isSoftwareGl || currentDpr < 1 ? 6 : 4;
           if (updateIdx === -1 && frameCounter % cadence === 0) {
             for (let step = 0; step < CAMERA_PRESET_LIST.length; step++) {
               const cand = (pipRoundRobinIdx + step) % CAMERA_PRESET_LIST.length;
@@ -1152,17 +1490,14 @@ export const StadiumArena3D = memo(function StadiumArena3D({
             const rt = previewRenderTargets[updateIdx];
             ensureRenderTargetSize(rt, PIP_RT_W, PIP_RT_H);
             updateSubCamera(updateIdx, CAMERA_PRESET_LIST[updateIdx].id, r.width / r.height);
-            const prevShadowEnabled = renderer.shadowMap.enabled;
-            const prevShadowAuto = renderer.shadowMap.autoUpdate;
-            renderer.shadowMap.enabled = false;
-            renderer.shadowMap.autoUpdate = false;
+            // Hide distant crowd during tiny 192x120 thumbnail pass (never toggle shadowMap.enabled!)
+            stadium.setSpectatorsVisible(false);
             renderer.setScissorTest(false);
             renderer.setRenderTarget(rt);
             renderer.setViewport(0, 0, rt.width, rt.height);
             renderer.render(scene, previewCameras[updateIdx]);
             renderer.setRenderTarget(null);
-            renderer.shadowMap.enabled = prevShadowEnabled;
-            renderer.shadowMap.autoUpdate = prevShadowAuto;
+            stadium.setSpectatorsVisible(true);
             previewDirty[updateIdx] = false;
           }
 
@@ -1225,7 +1560,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
     pipPlacement === 'right-grid'
       ? 'absolute bottom-14 left-3 right-3 sm:left-6 sm:right-6 lg:left-auto lg:right-6 xl:right-10 lg:top-1/2 lg:bottom-auto lg:-translate-y-1/2 lg:w-[390px] xl:w-[448px] z-20 pointer-events-auto'
       : pipPlacement === 'top-row'
-      ? 'absolute top-[86px] left-2.5 right-2.5 sm:left-auto sm:right-3 sm:w-[460px] z-20 pointer-events-auto'
+      ? 'absolute top-[138px] left-2.5 right-2.5 sm:left-auto sm:right-3 sm:w-[460px] z-20 pointer-events-auto'
       : 'absolute bottom-[60px] left-3 right-3 z-20 pointer-events-auto';
 
   const pipGridClass =
@@ -1243,6 +1578,7 @@ export const StadiumArena3D = memo(function StadiumArena3D({
         <div className="absolute inset-0 z-20 grid grid-cols-2 grid-rows-2 pointer-events-none">
           {CAMERA_PRESET_LIST.map((cam) => {
             const isActive = cameraPreset === cam.id;
+            const tracksParticipant = cam.id === 'broadcast' || cam.id === 'chase' || cam.id === 'side';
             return (
               <button
                 key={cam.id}
@@ -1258,10 +1594,17 @@ export const StadiumArena3D = memo(function StadiumArena3D({
                 }`}
                 title={`Fokus ke ${cam.camCode} · ${cam.label}`}
               >
-                <div className="absolute top-2 left-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#081226]/90 border border-white/20 text-[11px] font-bold text-white">
-                  <Camera className="w-3 h-3 text-[#FF6B1A]" />
-                  <span className="font-mono text-[#FACC15]">{cam.camCode}</span>
-                  <span className="hidden sm:inline text-slate-200 font-semibold">· {cam.label}</span>
+                <div className="absolute top-2 left-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#081226]/90 border border-white/20 text-[11px] font-bold text-white max-w-[calc(100%-16px)]">
+                  <Camera className="w-3 h-3 text-[#FF6B1A] shrink-0" />
+                  <span className="font-mono text-[#FACC15] shrink-0">{cam.camCode}</span>
+                  <span className="hidden sm:inline text-slate-200 font-semibold truncate">
+                    · {cam.label}
+                  </span>
+                  {tracksParticipant && followedPlayerName && (
+                    <span className="text-cyan-300 font-semibold truncate">
+                      · {followedPlayerName}
+                    </span>
+                  )}
                 </div>
                 <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#081226]/90 border border-white/20 text-[10px] font-semibold text-white">
                   <Maximize2 className="w-3 h-3 text-[#FACC15]" />
@@ -1270,18 +1613,60 @@ export const StadiumArena3D = memo(function StadiumArena3D({
               </button>
             );
           })}
+
+          {onSelectFollowedPlayer && followablePlayers && followablePlayers.length > 0 && (
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#081226]/95 border border-[#FACC15]/60 shadow-2xl">
+              <Crosshair className="w-3.5 h-3.5 text-[#FACC15] shrink-0" />
+              <span className="text-[11px] font-bold text-slate-200 hidden sm:inline">Ikuti:</span>
+              <select
+                aria-label="Pilih peserta untuk diikuti kamera"
+                value={followedPlayerId ?? ''}
+                onChange={(e) => onSelectFollowedPlayer(e.target.value || null)}
+                className="bg-[#0F2957] text-white text-[11px] font-semibold rounded px-2 py-0.5 border border-white/20 focus:outline-none focus:border-[#FACC15] max-w-[180px] cursor-pointer"
+              >
+                <option value="">{defaultFollowLabel}</option>
+                {followablePlayers.map((fp) => (
+                  <option key={fp.id} value={fp.id}>
+                    {fp.name}
+                    {fp.className ? ` (${fp.className})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
 
       {/* Live 4-Camera PiP Preview Strip / Panel Overlay */}
       {cameraViewMode === 'pip' && (
         <div className={pipContainerClass}>
-          <div className="flex items-center justify-between gap-2 mb-1.5 px-2.5 py-1 rounded-lg bg-[#081226]/90 border border-blue-400/30">
-            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white">
-              <Camera className="w-3.5 h-3.5 text-[#FF6B1A]" />
-              <span>LIVE PREVIEW 4 KAMERA</span>
+          <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5 px-2.5 py-1 rounded-lg bg-[#081226]/92 border border-blue-400/30">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white min-w-0">
+              <Camera className="w-3.5 h-3.5 text-[#FF6B1A] shrink-0" />
+              <span className="truncate">LIVE 4 KAMERA</span>
             </div>
-            <div className="inline-flex items-center gap-1">
+
+            {onSelectFollowedPlayer && followablePlayers && followablePlayers.length > 0 && (
+              <div className="inline-flex items-center gap-1 min-w-0">
+                <Crosshair className="w-3 h-3 text-[#FACC15] shrink-0" />
+                <select
+                  aria-label="Pilih nama peserta untuk diikuti kamera live preview"
+                  value={followedPlayerId ?? ''}
+                  onChange={(e) => onSelectFollowedPlayer(e.target.value || null)}
+                  className="bg-[#0F2957] text-white text-[10px] font-semibold rounded px-1.5 py-0.5 border border-white/20 focus:outline-none focus:border-[#FACC15] max-w-[145px] sm:max-w-[180px] cursor-pointer"
+                >
+                  <option value="">{defaultFollowLabel}</option>
+                  {followablePlayers.map((fp) => (
+                    <option key={fp.id} value={fp.id}>
+                      {fp.name}
+                      {fp.className ? ` (${fp.className})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="inline-flex items-center gap-1 shrink-0">
               {onChangeCameraViewMode && (
                 <>
                   <button

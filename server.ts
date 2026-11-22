@@ -23,6 +23,12 @@ import {
   startRoomMatch,
 } from './server/gameManager.ts';
 import {
+  attachLiveRelaySocket,
+  getLiveRelayStats,
+  startLiveRelayCleanup,
+  stopLiveRelayCleanup,
+} from './server/liveRelay.ts';
+import {
   MAX_MATCH_SCORE,
   calcPointsPerQuestion,
   calcScoreFromCorrect,
@@ -30,15 +36,34 @@ import {
 } from './src/utils/matchScaling.ts';
 
 const PORT = Number(process.env.PORT || 3000);
-const JWT_SECRET = process.env.JWT_SECRET || 'edurun-arena-3d-secret-key-2026';
+const JWT_SECRET = process.env.JWT_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
 
 initDatabase();
 
 const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'edu-run-arena-3d' });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    service: 'edu-run-arena-3d',
+    serverTime: Date.now(),
+    uptimeSec: Math.round(process.uptime()),
+    relay: getLiveRelayStats(),
+  });
+});
+
+app.get('/api/time', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.json({ serverTime: Date.now() });
 });
 
 const upload = multer({
@@ -1075,9 +1100,34 @@ app.get('/api/public/rooms/:code/results/:participantId', (req, res) => {
   });
 });
 
+// ==================== GLOBAL EXPRESS ERROR GUARD ====================
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const errObj = err as { code?: string; status?: number; message?: string };
+  if (errObj?.code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({ error: 'Ukuran file terlalu besar (maksimal 10 MB).' });
+    return;
+  }
+  const status = typeof errObj?.status === 'number' && errObj.status >= 400 ? errObj.status : 500;
+  if (status >= 500) {
+    console.error('[Express Error]', err);
+  }
+  res.status(status).json({
+    error: status >= 500 ? 'Terjadi gangguan sementara pada server. Silakan coba lagi.' : errObj?.message || 'Permintaan tidak valid.',
+  });
+});
+
 // ==================== SERVER STARTUP (HTTP + WS + VITE) ====================
 async function startServer() {
   const server = http.createServer(app);
+  // Proxy-safe HTTP keep-alive & low-latency TCP settings (prevents 502 / Nagle stalls)
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  server.requestTimeout = 30000;
+  server.on('connection', (socket) => {
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, 30000);
+  });
+
   const wss = new WebSocketServer({
     server,
     path: '/ws',
@@ -1085,13 +1135,20 @@ async function startServer() {
     maxPayload: 64 * 1024,
   });
 
-  // WebSocket keepalive heartbeat (prevents idle disconnects behind Render / Cloud Run / school Wi-Fi proxies)
+  startLiveRelayCleanup();
+
+  // WebSocket keepalive heartbeat + TCP_NODELAY (prevents idle disconnects & 40-200ms Nagle delay)
   const aliveSockets = new WeakMap<object, boolean>();
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    req.socket?.setNoDelay?.(true);
     aliveSockets.set(ws, true);
     ws.on('pong', () => {
       aliveSockets.set(ws, true);
     });
+    ws.on('error', () => {
+      // Prevent unhandled socket error events from bubbling up
+    });
+    attachLiveRelaySocket(ws);
   });
   const heartbeatTimer = setInterval(() => {
     for (const ws of wss.clients) {
@@ -1101,11 +1158,18 @@ async function startServer() {
       }
       aliveSockets.set(ws, false);
       if (ws.readyState === 1) {
-        ws.ping();
+        try {
+          ws.ping();
+        } catch {
+          ws.terminate();
+        }
       }
     }
-  }, 25000);
-  wss.on('close', () => clearInterval(heartbeatTimer));
+  }, 20000);
+  wss.on('close', () => {
+    clearInterval(heartbeatTimer);
+    stopLiveRelayCleanup();
+  });
 
   attachWebSocketHandlers(wss);
 
@@ -1138,7 +1202,33 @@ async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`EDU RUN ARENA 3D server running on http://localhost:${PORT}`);
   });
+
+  const shutdown = () => {
+    clearInterval(heartbeatTimer);
+    stopLiveRelayCleanup();
+    wss.close(() => {
+      server.close(() => {
+        try {
+          db.close();
+        } catch {
+          // ignore
+        }
+        process.exit(0);
+      });
+    });
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err);
+});
 
 startServer().catch((err) => {
   console.error('Failed to start server:', err);

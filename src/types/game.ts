@@ -345,6 +345,7 @@ export interface PlayerState {
   unansweredCount: number;
   score: number; // dynamically scaled to max 100 based on questionCount
   connected: boolean;
+  joinedAtMs?: number;
   startedAt?: number;
   finishedAt?: number;
   durationMs?: number;

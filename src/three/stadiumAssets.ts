@@ -439,35 +439,76 @@ export function createFloodlightHaloTexture(): THREE.CanvasTexture {
 
 export function createStartFinishBannerTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 1280;
-  canvas.height = 224;
+  canvas.width = 2048;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d')!;
 
-  const sq = 28;
-  for (let y = 0; y < 224; y += sq) {
-    for (let x = 0; x < 1280; x += sq) {
-      const dark = (x / sq + y / sq) % 2 === 0;
+  // 1. Clean checkered racing ends strictly confined to left (0..192) and right (1856..2048) margins
+  const sq = 32;
+  const endBandW = 192;
+  for (let y = 0; y < 256; y += sq) {
+    for (let x = 0; x < endBandW; x += sq) {
+      const dark = ((x / sq) + (y / sq)) % 2 === 0;
+      ctx.fillStyle = dark ? '#081226' : '#FFFFFF';
+      ctx.fillRect(x, y, sq, sq);
+    }
+    for (let x = 2048 - endBandW; x < 2048; x += sq) {
+      const dark = ((x / sq) + (y / sq)) % 2 === 0;
       ctx.fillStyle = dark ? '#081226' : '#FFFFFF';
       ctx.fillRect(x, y, sq, sq);
     }
   }
-  ctx.fillStyle = '#0B1D42';
-  ctx.fillRect(118, 22, 1044, 180);
-  ctx.strokeStyle = '#FACC15';
-  ctx.lineWidth = 7;
-  ctx.strokeRect(118, 22, 1044, 180);
 
+  // 2. Solid deep-navy center signboard (1664px wide) — zero checkered overlap behind text
+  const panelX = endBandW;
+  const panelW = 2048 - endBandW * 2;
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, 256);
+  bgGrad.addColorStop(0, '#081736');
+  bgGrad.addColorStop(0.5, '#0F2957');
+  bgGrad.addColorStop(1, '#081736');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(panelX, 0, panelW, 256);
+
+  // Crisp gold championship border cleanly framing the signboard
+  ctx.strokeStyle = '#FACC15';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(panelX + 10, 10, panelW - 20, 236);
+
+  // 3. Top orange ribbon
   ctx.fillStyle = '#FF6B1A';
-  ctx.fillRect(138, 36, 1004, 34);
+  ctx.fillRect(panelX + 28, 24, panelW - 56, 44);
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 20px sans-serif';
+  ctx.font = 'bold 24px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('INTERNATIONAL CHAMPIONSHIP STADIUM · 30 ATHLETIC LANES', 640, 53);
+  ctx.fillText('EDU RUN ARENA 3D · INTERNATIONAL CHAMPIONSHIP TRACK', 1024, 47, panelW - 96);
 
+  // 4. Bold, unobstructed START / FINISH centerpiece with wide side margins
+  ctx.save();
+  ctx.font = '900 108px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 4;
+
+  // Draw crisp START · / · FINISH balanced symmetrically around x = 1024
+  ctx.textAlign = 'right';
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 64px sans-serif';
-  ctx.fillText('START / FINISH · EDU RUN ARENA 3D', 640, 136);
+  ctx.fillText('START', 960, 158, 620);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FACC15';
+  ctx.fillText('/', 1024, 158);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText('FINISH', 1088, 158, 620);
+  ctx.restore();
+
+  // Subtle gold accent bars flanking the title inside the navy box
+  ctx.fillStyle = '#FACC15';
+  ctx.fillRect(panelX + 54, 149, 110, 10);
+  ctx.fillRect(panelX + panelW - 164, 149, 110, 10);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;

@@ -31,9 +31,29 @@ export function LandingScreen({
   onShowHowToPlay,
 }: LandingScreenProps) {
   const [cameraPreset, setCameraPreset] = useState<CameraPresetId>('broadcast');
-  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('pip');
+  const [cameraViewMode, setCameraViewMode] = useState<CameraViewMode>('single');
+  const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
 
   const isQuadMode = cameraViewMode === 'quad';
+  const followedRunner = followedPlayerId
+    ? SHOWCASE_RUNNERS.find((r) => r.id === followedPlayerId) ?? null
+    : null;
+  const followableRunners = SHOWCASE_RUNNERS.map((r) => ({
+    id: r.id,
+    name: r.name,
+    className: r.className,
+  }));
+
+  function handleSelectFollowedRunner(playerId: string | null) {
+    setFollowedPlayerId(playerId);
+    if (
+      playerId &&
+      cameraViewMode === 'single' &&
+      (cameraPreset === 'broadcast' || cameraPreset === 'finish')
+    ) {
+      setCameraPreset('chase');
+    }
+  }
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#081226] select-none">
@@ -49,6 +69,11 @@ export function LandingScreen({
           venue="stadium_day"
           cameraPreset={cameraPreset}
           cameraViewMode={cameraViewMode}
+          followedPlayerId={followedRunner?.id ?? null}
+          followedPlayerName={followedRunner?.name ?? null}
+          followablePlayers={followableRunners}
+          defaultFollowLabel="Otomatis (Terdepan)"
+          onSelectFollowedPlayer={handleSelectFollowedRunner}
           pipPlacement="right-grid"
           onSelectCameraPreset={setCameraPreset}
           onChangeCameraViewMode={setCameraViewMode}
@@ -71,7 +96,7 @@ export function LandingScreen({
         <div className="relative z-30 p-4 flex items-center justify-end pointer-events-none">
           <button
             type="button"
-            onClick={() => setCameraViewMode('pip')}
+            onClick={() => setCameraViewMode('single')}
             className="pointer-events-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#081226]/92 border border-blue-400/40 text-sm font-semibold text-white hover:bg-[#0F2957] transition-colors cursor-pointer shadow-lg"
           >
             <ArrowLeft className="w-4 h-4 text-[#FACC15]" />

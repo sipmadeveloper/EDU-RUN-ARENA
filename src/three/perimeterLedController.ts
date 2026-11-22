@@ -15,25 +15,28 @@ export interface PerimeterLedController {
 
 const CANVAS_W = 2048;
 const CANVAS_H = 256;
+const PHYS_SCALE = 0.5;
+const PHYS_W = Math.round(CANVAS_W * PHYS_SCALE);
+const PHYS_H = Math.round(CANVAS_H * PHYS_SCALE);
 const TRANSITION_SEC = 0.45;
 
 export function createPerimeterLedController(
   initialConfig: StadiumLedConfig = DEFAULT_STADIUM_LED_CONFIG
 ): PerimeterLedController {
   const canvas = document.createElement('canvas');
-  canvas.width = CANVAS_W;
-  canvas.height = CANVAS_H;
+  canvas.width = PHYS_W;
+  canvas.height = PHYS_H;
   const ctx = canvas.getContext('2d')!;
 
   // Scratch canvases for smooth cross-fade transitions between slides (allocated once, zero GC in tick)
   const prevCanvas = document.createElement('canvas');
-  prevCanvas.width = CANVAS_W;
-  prevCanvas.height = CANVAS_H;
+  prevCanvas.width = PHYS_W;
+  prevCanvas.height = PHYS_H;
   const prevCtx = prevCanvas.getContext('2d')!;
 
   const nextCanvas = document.createElement('canvas');
-  nextCanvas.width = CANVAS_W;
-  nextCanvas.height = CANVAS_H;
+  nextCanvas.width = PHYS_W;
+  nextCanvas.height = PHYS_H;
   const nextCtx = nextCanvas.getContext('2d')!;
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -96,6 +99,7 @@ export function createPerimeterLedController(
     const accent = slide.accentHex || '#FACC15';
     const textCol = slide.textHex || '#FFFFFF';
 
+    targetCtx.setTransform(PHYS_SCALE, 0, 0, PHYS_SCALE, 0, 0);
     targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     targetCtx.fillStyle = bg;
     targetCtx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -249,11 +253,12 @@ export function createPerimeterLedController(
         drawSlideToContext(prevCtx, slide);
         drawSlideToContext(nextCtx, nextSlide);
       }
-      if (!wasTransitioning || transitionDrawAccum >= 0.05) {
+      if (!wasTransitioning || transitionDrawAccum >= 0.1) {
         transitionDrawAccum = 0;
         wasTransitioning = true;
         const alpha = THREE.MathUtils.clamp(1 - timeRemaining / TRANSITION_SEC, 0, 1);
-        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, PHYS_W, PHYS_H);
         ctx.drawImage(prevCanvas, 0, 0);
         ctx.save();
         ctx.globalAlpha = alpha;
